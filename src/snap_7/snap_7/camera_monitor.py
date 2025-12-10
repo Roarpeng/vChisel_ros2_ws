@@ -11,6 +11,7 @@ import subprocess
 import threading
 import time
 from std_msgs.msg import Bool
+import pyrealsense2 as rs
 
 
 class CameraMonitor(Node):
@@ -53,6 +54,9 @@ class CameraMonitor(Node):
         # Timer for monitoring
         self.monitor_timer = self.create_timer(1.0, self.monitor_callback)
         
+        # Timer for physical device check
+        self.device_check_timer = self.create_timer(3.0, self.check_physical_device)
+        
         self.get_logger().info('Camera monitor initialized')
     
     def image_callback(self, msg):
@@ -62,6 +66,27 @@ class CameraMonitor(Node):
     def camera_info_callback(self, msg):
         """处理相机信息数据到达"""
         self.last_camera_info_time = self.get_clock().now()
+    
+    def check_physical_device(self):
+        """检查物理设备连接状态"""
+        try:
+            # 使用 pyrealsense2 检查物理设备
+            ctx = rs.context()
+            devices = ctx.query_devices()
+            if len(devices) == 0:
+                # 没有检测到RealSense设备
+                self.get_logger().warning('No RealSense camera detected physically!')
+                # 发布离线状态
+                status_msg = Bool()
+                status_msg.data = False
+                self.camera_status_pub.publish(status_msg)
+            else:
+                self.get_logger().debug(f'Detected {len(devices)} RealSense camera(s)')
+        except ImportError:
+            # 如果pyrealsense2不可用，回退到其他检查方法
+            self.get_logger().info('pyrealsense2 not available, using alternative device check')
+        except Exception as e:
+            self.get_logger().warning(f'Error checking physical device: {e}')
     
     def monitor_callback(self):
         """监控回调函数"""
@@ -86,7 +111,7 @@ class CameraMonitor(Node):
     
     def check_and_restart_camera(self):
         """检查并重启相机进程"""
-        if self.camera_process and self.camera_process.poll() is None:
+        if self.camera_process and self.camera_process.poll() is not None:
             # 进程仍在运行但无数据，终止它
             self.get_logger().info('Terminating unresponsive camera process...')
             try:

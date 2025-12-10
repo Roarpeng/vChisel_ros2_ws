@@ -533,6 +533,34 @@ private:
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
             rate.sleep();
         }
+        
+        // 内存清理：清理临时数据结构
+        // 清理输出点云数据
+        outSmoothedCloud_.data.clear();
+        outSmoothedCloud_.data.shrink_to_fit();
+        outTarPointCloud_.data.clear();
+        outTarPointCloud_.data.shrink_to_fit();
+        outAllNormCloud_.data.clear();
+        outAllNormCloud_.data.shrink_to_fit();
+        outHolesCloud_.data.clear();
+        outHolesCloud_.data.shrink_to_fit();
+        outTriangles_.polygons.clear();
+        outTriangles_.polygons.shrink_to_fit();
+        
+        // 清理内部点云数据
+        cloud_holes_->clear();
+        cloud_in_->clear();
+        cloud_->clear();
+        cloud_downSampled_->clear();
+        cloud_filtered_->clear();
+        cloud_smoothed_->clear();
+        cloud_normals_->clear();
+        cloud_with_normals_->clear();
+        cloud_shrink_->clear();
+        cloud_tarPoint_->clear();
+        
+        // 重置结果列表
+        memset(tarPointList_, 0, sizeof(tarPointList_));
     }
 };
 

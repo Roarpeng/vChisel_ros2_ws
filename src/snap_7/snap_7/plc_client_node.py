@@ -381,10 +381,12 @@ class PLCClientNode(Node):
             cmd = ['ros2', 'run', 'realsense2_camera', 'realsense2_camera_node']
             self.cam_proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             self.camStatus = True
-            time.sleep(0.5)
+            time.sleep(2)  # 增加等待时间确保相机完全启动
             if self.cam_proc.poll() is not None:
                 self.get_logger().error(f'Camera process exited immediately with code {self.cam_proc.poll()}')
                 self.camStatus = False
+                # 发送错误状态到PLC
+                self.write_registers_uint16([999], start=16)
                 return
             self.get_logger().info('Camera process started')
             
@@ -394,8 +396,10 @@ class PLCClientNode(Node):
             
         except FileNotFoundError:
             self.get_logger().error('ros2 executable not found. Ensure ROS2 is sourced.')
+            self.write_registers_uint16([999], start=16)  # 发送错误代码
         except Exception as e:
             self.get_logger().error(f'Failed to start camera process: {e}')
+            self.write_registers_uint16([999], start=16)  # 发送错误代码
 
     def cam_shutdown(self):
         if not self.camStatus:
@@ -458,7 +462,9 @@ class PLCClientNode(Node):
     def norm_bringup(self, seq):
         """Initiate async norm_calc service call."""
         if not self.camStatus:
-            self.get_logger().info('Camera not launched yet')
+            self.get_logger().warning('Camera not launched yet, cannot perform norm calculation')
+            # 向PLC发送错误状态
+            self.write_registers_uint16([998], start=16)  # 相机未启动错误代码
             return
         if self.pending_norm_future is not None and not self.pending_norm_future.done():
             self.get_logger().warning('Another norm_calc request is pending, skipping')
@@ -473,6 +479,8 @@ class PLCClientNode(Node):
             self.pending_seq = seq
         except Exception as e:
             self.get_logger().error(f'Failed to initiate norm_calc call: {e}')
+            # 向PLC发送错误状态
+            self.write_registers_uint16([997], start=16)  # 服务调用错误代码
 
     def _handle_norm_response(self, resp, seq):
         """Process the norm_calc service response."""
@@ -528,6 +536,10 @@ class PLCClientNode(Node):
                 self.get_logger().warning(f'Point count write to offset 18 failed')
             if not rosstatus_write_success:
                 self.get_logger().warning(f'Status write to offset 16 failed')
+        
+        # 内存清理：清理临时数据结构
+        del output_data  # 显式删除临时数据数组
+        self.Outputlist = [0] * 288  # 重置输出列表
 
     def poll_plc(self):
         # Check if norm_calc response is ready
@@ -578,8 +590,13 @@ class PLCClientNode(Node):
                 self.get_logger().info('Open the Cam!')
                 if not self.camStatus:
                     self.cam_bringup()
-                # Write rosStatus = 200
-                self.write_registers_uint16([200], start=16)
+                # 检查相机是否真的启动成功
+                if self.check_camera_connection():
+                    self.write_registers_uint16([200], start=16)  # 成功启动
+                    self.get_logger().info('Camera successfully launched and connected')
+                else:
+                    self.write_registers_uint16([999], start=16)  # 启动失败
+                    self.get_logger().error('Failed to launch camera or camera not connected')
                 self.Old_trigger = self.Trigger_Portal
 
             elif self.Trigger_Portal == 110 and self.Old_trigger != self.Trigger_Portal:

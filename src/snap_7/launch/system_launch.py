@@ -93,6 +93,7 @@ def generate_launch_description():
     #     name='norm_viewer',
     #     output='screen'
     # )
+    
 
     return LaunchDescription([
         # 启动所有节点
