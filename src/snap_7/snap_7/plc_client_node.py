@@ -387,6 +387,11 @@ class PLCClientNode(Node):
                 self.camStatus = False
                 return
             self.get_logger().info('Camera process started')
+            
+            # 添加相机状态监控
+            self.camera_monitor_thread = threading.Thread(target=self._monitor_camera_status, daemon=True)
+            self.camera_monitor_thread.start()
+            
         except FileNotFoundError:
             self.get_logger().error('ros2 executable not found. Ensure ROS2 is sourced.')
         except Exception as e:
@@ -412,6 +417,43 @@ class PLCClientNode(Node):
         self.mark_2 = 0
         self.pakg_new = 0
         self.get_logger().info('Camera process shutdown complete')
+
+    def _monitor_camera_status(self):
+        """监控相机进程状态，检测意外断开"""
+        while self.camStatus and rclpy.ok():
+            try:
+                if self.cam_proc and self.cam_proc.poll() is not None:
+                    # 相机进程意外退出
+                    self.get_logger().warning(f'Camera process unexpectedly terminated with code {self.cam_proc.poll()}')
+                    self.camStatus = False
+                    # 向PLC发送错误状态
+                    self.write_registers_uint16([999], start=16)  # 发送错误代码
+                    break
+                time.sleep(1)  # 每秒检查一次
+            except Exception as e:
+                self.get_logger().error(f'Error in camera monitoring thread: {e}')
+                break
+
+    def check_camera_connection(self):
+        """检查相机连接状态"""
+        if not self.camStatus:
+            return False
+        if self.cam_proc and self.cam_proc.poll() is None:
+            return True
+        else:
+            self.camStatus = False
+            return False
+
+    def safe_camera_operation(self):
+        """安全的相机操作，包含连接检查"""
+        if not self.check_camera_connection():
+            self.get_logger().warning('Camera not connected, attempting to restart...')
+            self.cam_bringup()
+            time.sleep(2)  # 等待相机启动
+            if not self.check_camera_connection():
+                self.get_logger().error('Failed to establish camera connection')
+                return False
+        return True
 
     def norm_bringup(self, seq):
         """Initiate async norm_calc service call."""
@@ -498,14 +540,24 @@ class PLCClientNode(Node):
                 resp = future.result()
                 if resp is None:
                     self.get_logger().error('norm_calc service returned None')
+                    # 发送错误状态到PLC
+                    self.write_registers_uint16([997], start=16)  # norm_calc服务错误
+                elif resp.pose_list.header.frame_id == "error":
+                    self.get_logger().error('norm_calc service returned error status')
+                    # 发送错误状态到PLC
+                    self.write_registers_uint16([996], start=16)  # 计算错误
                 else:
                     self._handle_norm_response(resp, seq)
             except Exception as e:
                 self.get_logger().error(f'Exception processing norm_calc result: {e}')
+                # 发送错误状态到PLC
+                self.write_registers_uint16([997], start=16)  # 异常错误
 
         # Read trigger from PLC
         data = self.read_db_area(DB_num=self.db_number, start=0, size=2)
         if data is None:
+            # 尝试重新连接PLC
+            self.connect_with_retry()
             return
 
         try:
@@ -532,8 +584,14 @@ class PLCClientNode(Node):
 
             elif self.Trigger_Portal == 110 and self.Old_trigger != self.Trigger_Portal:
                 self.get_logger().info('Take a Picture and calculate pose data!')
-                self.callSeq += 1
-                self.norm_bringup(self.callSeq)
+                # 在执行计算前先检查相机连接
+                if self.safe_camera_operation():
+                    self.callSeq += 1
+                    self.norm_bringup(self.callSeq)
+                else:
+                    self.get_logger().error('Cannot perform norm calculation: camera not connected')
+                    # 向PLC发送错误状态
+                    self.write_registers_uint16([998], start=16)  # 发送相机错误代码
                 # Note: rosStatus will be written after processing is complete in _handle_norm_response
                 self.Old_trigger = self.Trigger_Portal
                 

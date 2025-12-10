@@ -348,12 +348,49 @@ private:
         frameNum_ = 0;
 
         img_ShotFlag = depth_ShotFlag = info_ShotFlag = true;//回调信号置1,三个sub线程执行回调，接受相机数据
+        
+        // 增加等待时间，原来为1秒，现在为3秒，以适应降低帧率后的情况
+        int wait_count = 0;
+        const int max_wait_count = 30; // 30 * 100ms = 3秒
         while (rclcpp::ok() && (!img_ready || !depth_ready || !info_ready)){
+            if (wait_count >= max_wait_count) {
+                RCLCPP_ERROR(this->get_logger(), "Camera data timeout after 3 seconds. img_ready:%d, depth_ready:%d, info_ready:%d", 
+                            img_ready, depth_ready, info_ready);
+                img_ShotFlag = depth_ShotFlag = info_ShotFlag = false;//回调信号置0
+                break; // 继续执行，使用可能不完整的数据
+            }
+            
             RCLCPP_WARN(this->get_logger(), "NOT ready yet.img_ready:%d,depth_ready:%d,info_ready:%d", img_ready, depth_ready, info_ready);
-            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            wait_count++;
         }
+        
         img_ShotFlag = depth_ShotFlag = info_ShotFlag = false;//回调信号置0
         RCLCPP_INFO(this->get_logger(), "Ready.img_ready:%d,depth_ready:%d,info_ready:%d", img_ready, depth_ready, info_ready);
+        
+        // 验证获取的数据是否有效，但降低严格性以适应降低帧率的情况
+        if (imgColor_.empty() || imgDepth_.empty()) {
+            RCLCPP_ERROR(this->get_logger(), "Invalid camera data received - image or depth is empty");
+            res->pose_list.header.frame_id = "error";
+            res->pose_list.header.stamp = this->get_clock()->now();
+            return;
+        }
+        
+        // 验证相机内参是否有效，但降低严格性
+        bool valid_camera_info = true;
+        for (size_t i = 0; i < camInfo_.k.size(); ++i) {
+            if (std::isnan(camInfo_.k[i]) || std::isinf(camInfo_.k[i])) {
+                valid_camera_info = false;
+                break;
+            }
+        }
+        if (!valid_camera_info) {
+            RCLCPP_ERROR(this->get_logger(), "Invalid camera info received - intrinsic parameters contain NaN or Inf");
+            res->pose_list.header.frame_id = "error";
+            res->pose_list.header.stamp = this->get_clock()->now();
+            return;
+        }
+
         img_ready = depth_ready = info_ready = false;
 
         // run detectors and processing

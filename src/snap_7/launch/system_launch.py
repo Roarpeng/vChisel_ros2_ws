@@ -40,6 +40,19 @@ def generate_launch_description():
         ]
     )
 
+    # 启动相机监控节点（工业级可靠性增强）
+    camera_monitor_node = Node(
+        package='snap_7',
+        executable='camera_monitor.py',
+        name='camera_monitor',
+        output='screen',
+        parameters=[
+            {'timeout_seconds': 5.0},
+            {'reconnect_attempts': 3},
+            {'reconnect_delay': 2.0}
+        ]
+    )
+
     # 启动图像和法向信息联合可视化节点（新增）- 这是您需要的主要功能
     image_norm_viewer_node = Node(
         package='norm_calc',
@@ -68,7 +81,8 @@ def generate_launch_description():
             'color_height': 480,
             'color_fps': 10.0,  # Reduced frame rate from 30 to 10 FPS
             'depth_fps': 10.0,  # Reduced frame rate from 30 to 10 FPS
-
+            # 添加相机可靠性增强参数
+            'initial_reset': True,  # 启动时重置设备
         }]
     )
 
@@ -84,6 +98,7 @@ def generate_launch_description():
         # 启动所有节点
         norm_calc_node,
         plc_client_node,
+        camera_monitor_node,
         image_norm_viewer_node,
         realsense_node,
         # norm_viewer_node  # 暂时注释掉有问题的节点

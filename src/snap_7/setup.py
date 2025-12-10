@@ -22,7 +22,8 @@ setup(
     entry_points={
         'console_scripts': [
             'snap_7_node = snap_7.plc_client_node:main',
-            'plc_sim_server = snap_7.plc_sim_server:main'
+            'plc_sim_server = snap_7.plc_sim_server:main',
+            'camera_monitor = snap_7.camera_monitor:main'
         ],
     },
 )
