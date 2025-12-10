@@ -79,7 +79,9 @@ class PLCClientNode(Node):
         
         # 用于相机状态监控的额外变量
         self.camera_disconnect_count = 0  # 记录连续检测到断开的次数
-        self.max_disconnect_threshold = 3  # 连续检测到断开的最大阈值
+        self.max_disconnect_threshold = 5  # 连续检测到断开的最大阈值，提高容错性
+        self.camera_connect_time = None  # 记录相机连接时间
+        self.grace_period_seconds = 10  # 宽限期，在此期间对断开更宽容
 
         # buffers for pages
         self.Output_Status = []
@@ -393,6 +395,8 @@ class PLCClientNode(Node):
         # 重置相机状态和断开计数器
         self.camStatus = False
         self.camera_disconnect_count = 0
+        import time
+        self.camera_connect_time = time.time()  # 记录连接时间
         time.sleep(1)  # 等待一段时间确保旧进程完全终止
         
         # 重试机制：最多尝试5次
@@ -509,6 +513,8 @@ class PLCClientNode(Node):
         """监控相机进程状态，检测意外断开"""
         # 重置断开计数器
         self.camera_disconnect_count = 0
+        import time
+        start_time = time.time()
         
         while self.camStatus and rclpy.ok():
             try:
@@ -517,9 +523,16 @@ class PLCClientNode(Node):
                     self.camera_disconnect_count += 1
                     self.get_logger().warning(f'Physical camera disconnected (count: {self.camera_disconnect_count})')
                     
+                    # 检查是否在宽限期内
+                    time_since_connect = time.time() - start_time if hasattr(self, 'camera_connect_time') else time.time() - start_time
+                    in_grace_period = time_since_connect < self.grace_period_seconds
+                    
+                    # 如果在宽限期内，使用更宽松的阈值
+                    threshold = 2 if in_grace_period else self.max_disconnect_threshold
+                    
                     # 只有当连续检测到断开超过阈值时，才认为相机真正断开
-                    if self.camera_disconnect_count >= self.max_disconnect_threshold:
-                        self.get_logger().warning('Physical camera disconnected permanently, stopping camera')
+                    if self.camera_disconnect_count >= threshold:
+                        self.get_logger().warning(f'Physical camera disconnected permanently after {self.camera_disconnect_count} consecutive failures, stopping camera')
                         # 设置相机状态为断开
                         self.camStatus = False
                         # 向PLC发送错误状态
