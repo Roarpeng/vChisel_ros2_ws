@@ -1,0 +1,26 @@
+# Parameters for norm_calc node
+norm_calc:
+  ros__parameters:
+    BOX_LEN: 0.05
+    BOX_ROW: 4
+    BOX_COLUMN: 6
+    XMIN: -0.15
+    XMAX: 0.15
+    YMIN: -0.1
+    YMAX: 0.1
+    ZMIN: 0.2
+    ZMAX: 0.6
+    BORDER_WIDTH: 0.03
+    NORM_TH: 0.95
+    AFFECT_RADIUS: 0.0009
+    HEIGHT_WEIGHT: 3.0
+    CURV_WEIGHT: 2.0
+    ANGLE_WEIGHT: 1.0
+    SEARCH_RADIUS: 0.03
+    SEARCH_NUM_TH: 100
+
+    TH_DEEP: 0.4
+    TH_DEEPNORM: 0.8
+    TH_HALF: 50
+    TH_FULL: 100
+    TH_ANGLE: 0.99

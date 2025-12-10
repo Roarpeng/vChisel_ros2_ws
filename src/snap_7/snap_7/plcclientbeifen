@@ -1,0 +1,451 @@
+#!/usr/bin/env python3
+"""
+A simple ROS2 node that talks to Siemens PLC DB using snap7.
+Behavior:
+- Periodically read a DB word (DB number and offset configurable).
+- If trigger value changes to 110, call the `norm_calc` service provided by `norm_calc` package.
+- Write back a small status and number-of-points to PLC DB.
+
+Notes:
+- Requires `python-snap7` (snap7) and ROS2 (rclpy).
+- This is a minimal example: production code should handle byte-order, types,
+  retries, connection loss, and DB layout precisely.
+"""
+
+import sys
+import time
+import struct
+import threading
+
+import rclpy
+from rclpy.node import Node
+from rclpy.duration import Duration
+from norm_calc.srv import NormCalcData
+import subprocess
+import shlex
+
+try:
+    import snap7
+    from snap7.util import get_int, set_int
+except Exception as e:
+    snap7 = None
+
+
+class PLCClientNode(Node):
+    def __init__(self):
+        super().__init__('plc_client_node')
+
+        # Parameters (could be remapped via launch)
+        self.declare_parameter('plc_address', '192.168.1.36')
+        self.declare_parameter('plc_rack', 0)
+        self.declare_parameter('plc_slot', 1)
+        self.declare_parameter('db_number', 2110)
+        self.declare_parameter('db_start', 0)  # byte offset
+        self.declare_parameter('poll_rate', 20.0)  # Hz
+
+        self.plc_address = self.get_parameter('plc_address').get_parameter_value().string_value
+        self.plc_rack = self.get_parameter('plc_rack').get_parameter_value().integer_value
+        self.plc_slot = self.get_parameter('plc_slot').get_parameter_value().integer_value
+        self.db_number = self.get_parameter('db_number').get_parameter_value().integer_value
+        self.db_start = self.get_parameter('db_start').get_parameter_value().integer_value
+        self.poll_rate = float(self.get_parameter('poll_rate').get_parameter_value().double_value)
+
+        if snap7 is None:
+            self.get_logger().error('python-snap7 is not installed. Install it with pip install snap7')
+            rclpy.shutdown()
+            return
+
+        self.client = snap7.client.Client()
+        self.connected = False
+        self.lock = threading.Lock()
+        self.prev_trigger = None
+        # state variables similar to modbus client
+        self.camStatus = False
+        self.cam_launch = None
+        self.norm_launch = None
+        self.mark_1 = 0
+        self.mark_2 = 0
+        self.pakg_new = 0
+        self.callSeq = 0
+        self.Old_trigger = 0
+        self.Trigger_Portal = 0
+        self.time_stamp = time.localtime()
+        # buffers for pages
+        self.Output_list_0 = []
+        self.Output_list_1 = [0] * 100
+        self.Output_list_2 = [0] * 100
+
+        # Create a client for calling norm_calc service
+        self.cli = self.create_client(NormCalcData, 'norm_calc')
+        if not self.cli.wait_for_service(timeout_sec=5.0):
+            self.get_logger().warning('norm_calc service not available yet')
+
+        # Start polling timer
+        timer_period = 1.0 / max(self.poll_rate, 0.1)
+        self.timer = self.create_timer(timer_period, self.poll_plc)
+
+        # Try to connect with retries
+        self.connect_with_retry()
+
+    def connect(self):
+        try:
+            if not self.client.get_connected():
+                self.client.connect(self.plc_address, self.plc_rack, self.plc_slot)
+            self.connected = True
+            self.get_logger().info(f'Connected to PLC at {self.plc_address} (rack={self.plc_rack}, slot={self.plc_slot})')
+        except Exception as e:
+            self.get_logger().error(f'Failed to connect to PLC: {e}')
+            self.connected = False
+
+    def connect_with_retry(self, max_retries=5):
+        retry_count = 0
+        retry_interval = 1
+        max_retry_interval = 5
+        while retry_count < max_retries:
+            try:
+                self.connect()
+                if self.connected:
+                    return True
+            except Exception:
+                pass
+            retry_count += 1
+            self.get_logger().warning(f'Connect retry {retry_count}/{max_retries} in {retry_interval}s')
+            time.sleep(retry_interval)
+            retry_interval = min(retry_interval + 1, max_retry_interval)
+        self.get_logger().error('Failed to connect to PLC after retries')
+        return False
+
+    def read_db_area(self,DB_num,start, size=2):
+        with self.lock:
+            try:
+                if not self.client.get_connected():
+                    self.connect()
+                #get trigger data from DB2110 start=0
+                data = self.client.db_read(DB_num, start, size)
+                # self.get_logger().info(f'Read DB: {data}')
+                return data
+            except Exception as e:
+                self.get_logger().error(f'Error reading DB: {e}')
+                self.connected = False
+                return None
+
+    def write_db_area(self, data_bytes, start=64):
+        with self.lock:
+            try:
+                if not self.client.get_connected():
+                    self.connect()
+                # snap7 client write_area can also be used; db_write is fine
+                self.client.db_write(self.db_number, start, data_bytes)
+                return True
+            except Exception as e:
+                self.get_logger().error(f'Error writing DB: {e}')
+                self.connected = False
+                return False
+
+    # Helper: convert a list of uint16 (python int) to bytes (big-endian) and write
+    def write_registers_uint16(self, reg_list, start=0):
+        # reg_list: iterable of ints 0..65535
+        b = bytearray()
+        for v in reg_list:
+            try:
+                v_int = int(v) & 0xFFFF
+            except Exception:
+                v_int = 0
+            b += (v_int).to_bytes(2, byteorder='big')
+            # print(f"{len(bytes(b))} bytes written to DB")
+        return self.write_db_area(bytes(b), start=start)
+
+    def Clean_Buffer(self):
+        # clear with 100 zeros as uint16
+        zlist = [0] * 100
+        self.write_registers_uint16(zlist, start=64)
+        self.get_logger().info('Clear All Data In Buffer!')
+
+    def Msg_Status_write(self, Msg_S):
+        # build header similar to modbus_client
+        self.time_stamp = time.localtime(time.time())
+        Output_list_0 = []
+        Output_list_0.append(int(Msg_S) & 0xFFFF)
+        Time_Word_1 = ((self.time_stamp.tm_year % 100) << 9) + (self.time_stamp.tm_mon << 5) + self.time_stamp.tm_mday
+        Output_list_0.append(int(Time_Word_1) & 0xFFFF)
+        Time_Word_2 = (self.time_stamp.tm_min << 6) + self.time_stamp.tm_sec
+        Output_list_0.append(int(Time_Word_2) & 0xFFFF)
+        Time_Word_3 = int(self.time_stamp.tm_hour)
+        Output_list_0.append(int(Time_Word_3) & 0xFFFF)
+        # pad to 100
+        # while len(Output_list_0) < 100:
+        while len(Output_list_0) < 50:
+
+            Output_list_0.append(0)
+        self.write_registers_uint16(Output_list_0, start=64)
+
+    def Msg_1_write(self):
+        # write page1 from self.Output_list_1
+        self.Clean_Buffer()
+        self.Output_list_1.pop(0)
+        self.Output_list_1.insert(0,210)
+        out = self.Output_list_1[:]
+        # ensure length multiple fits
+        if len(out) < 100:
+            out += [0] * (100 - len(out))
+        self.write_registers_uint16(out, start=64)
+
+    def Msg_2_write(self):
+        self.Clean_Buffer()
+        self.Output_list_1.pop(0)
+        self.Output_list_1.insert(0,215)
+        out = self.Output_list_2[:]
+        if len(out) < 100:
+            out += [0] * (100 - len(out))
+        # write to next block (assume next 100 registers -> offset + 200 bytes)
+        self.write_registers_uint16(out, start=64)
+
+    def cam_bringup(self):
+        # Launch the realsense2_camera node as a separate process using ros2 run
+        if self.camStatus:
+            self.get_logger().info('Camera already launched')
+            return
+
+        try:
+            # Use ros2 run to start the realsense node. This assumes ROS2 environment is sourced.
+            cmd = ['ros2', 'run', 'realsense2_camera', 'realsense2_camera_node']
+            # start the process
+            self.cam_proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            self.camStatus = True
+
+            # 等待一小段時間，讓進程有時間啟動
+            time.sleep(0.5)
+            # 檢查進程是否仍在運行
+            if self.cam_proc.poll() is not None:
+                # 進程已經退出，可能啟動失敗
+                print(f"進程啟動失敗，退出碼：{self.cam_proc.poll()}")
+            else:
+                print("進程啟動成功，正在運行")
+
+            # publish status header to PLC DB
+            self.Msg_Status_write(200)
+            self.get_logger().info('Camera process started (ros2 run realsense2_camera realsense2_camera_node)')
+        except FileNotFoundError:
+            self.get_logger().error('ros2 executable not found. Ensure ROS2 is sourced in the environment where this node runs')
+        except Exception as e:
+            self.get_logger().error(f'Failed to start camera process: {e}')
+
+    def cam_shutdown(self):
+        # Terminate the external camera process if started
+        if not self.camStatus:
+            self.get_logger().info('Camera not running')
+            return
+
+        try:
+            if hasattr(self, 'cam_proc') and self.cam_proc is not None:
+                self.cam_proc.terminate()
+                try:
+                    self.cam_proc.wait(timeout=5)
+                except Exception:
+                    self.cam_proc.kill()
+                self.cam_proc = None
+        except Exception as e:
+            self.get_logger().warning(f'Error terminating camera process: {e}')
+
+        self.camStatus = False
+        self.mark_1 = 0
+        self.mark_2 = 0
+        self.pakg_new = 0
+        self.get_logger().info('Camera process shutdown complete')
+
+    def norm_bringup(self, seq):
+        # similar to modbus version: call norm_calc service and build Output_list_1/2
+        if not self.camStatus:
+            self.get_logger().info('Camera not launched yet')
+            return
+        try:
+            req = NormCalcData.Request()
+            req.seq = int(seq)
+            self.get_logger().info('Calling norm_calc service...')
+            future = self.cli.call_async(req)
+            rclpy.spin_until_future_complete(self, future, timeout_sec=10.0)
+            if future.result() is None:
+                self.get_logger().error('norm_calc service failed or timed out')
+                return
+            resp1 = future.result()
+            self.get_logger().info(f'we got {len(resp1.pose_list.poses)} valid positions')
+
+            Registor_list = []
+            self.time_stamp = time.localtime(time.time())
+            if len(resp1.pose_list.poses) > 0:
+                Status_Word = 100
+            else:
+                Status_Word = 99
+            Registor_list.append(int(Status_Word))
+            Time_Word_1 = ((self.time_stamp.tm_year % 100) << 9) + (self.time_stamp.tm_mon << 5) + self.time_stamp.tm_mday
+            Registor_list.append(int(Time_Word_1))
+            Time_Word_2 = (self.time_stamp.tm_min << 6) + self.time_stamp.tm_sec
+            Registor_list.append(int(Time_Word_2))
+            Time_Word_3 = int(self.time_stamp.tm_hour)
+            Registor_list.append(int(Time_Word_3))
+            Registor_list.append(int(seq))
+            Registor_list.append(int(len(resp1.pose_list.poses)))
+            self.Output_list_1 = Registor_list[:]
+            self.Output_list_2 = Registor_list[:]
+            self.Output_list_1.append(1)
+            self.Output_list_2.append(2)
+
+            if Status_Word != 99 and len(resp1.pose_list.poses) > 0:
+                for i, pose in enumerate(resp1.pose_list.poses):
+                    vals = [pose.position.x, pose.position.y, pose.position.z,
+                            pose.orientation.x, pose.orientation.y, pose.orientation.z]
+                    # convert same as modbus: (v+1)*10000
+                    conv = [int((v + 1) * 10000) & 0xFFFF for v in vals]
+                    if i < 12:
+                        self.Output_list_1.extend(conv)
+                    else:
+                        self.Output_list_2.extend(conv)
+
+            # ensure lists are ints
+            self.Output_list_1 = [int(x) & 0xFFFF for x in self.Output_list_1]
+            self.Output_list_2 = [int(x) & 0xFFFF for x in self.Output_list_2]
+
+            # write first page
+            self.Msg_1_write()
+            self.pakg_new = 1
+            # norm node done
+            self.get_logger().info('Norm calculation done and first page written')
+        except Exception as e:
+            self.get_logger().error(f'Exception in norm_bringup: {e}')
+
+    def poll_plc(self):
+        # Read 2 bytes (uint16) trigger
+        data = self.read_db_area(DB_num=2110,start =0,size=2)
+        # buffer = bytearray([0b00000001])
+        # self.write_db_area(start= 134,data_bytes = buffer)
+        if data is None:
+            return
+        try:
+            trigger = int.from_bytes(data[0:2], byteorder='big', signed=False)
+            self.get_logger().info(f'trigger:{trigger}')
+        except Exception:
+            trigger = 0
+
+        if self.prev_trigger is None:
+            self.prev_trigger = trigger
+
+        if trigger != self.prev_trigger:
+            self.get_logger().info(f'Trigger changed: {self.prev_trigger} -> {trigger}')
+            self.Trigger_Portal = int(trigger)
+            # mirror modbus logic
+            if self.Trigger_Portal == 100 and not (self.Old_trigger == self.Trigger_Portal):
+                self.get_logger().info('Open the Cam!')
+                if not self.camStatus:
+                    self.cam_bringup()
+                self.Old_trigger = self.Trigger_Portal
+
+            elif self.Trigger_Portal == 105 and self.camStatus and not (self.Old_trigger == self.Trigger_Portal):
+                self.get_logger().info('Error, Force to shut down the Cam!')
+                self.cam_shutdown()
+                self.Old_trigger = self.Trigger_Portal
+
+            elif self.Trigger_Portal == 105 and not self.camStatus and not (self.Old_trigger == self.Trigger_Portal):
+                self.Old_trigger = self.Trigger_Portal
+                self.get_logger().info('Cam has opened yet')
+
+            elif self.Trigger_Portal == 110 and not (self.Old_trigger == self.Trigger_Portal):
+                self.get_logger().info('Take a Picture!')
+                self.callSeq += 1
+                self.norm_bringup(self.callSeq)
+                # first part already written in norm_bringup
+                self.mark_1 = 1
+                self.Old_trigger = self.Trigger_Portal
+
+            elif self.Trigger_Portal == 115 and self.pakg_new and not (self.Old_trigger == self.Trigger_Portal):
+                # write second page
+                self.Msg_2_write()
+                self.mark_2 = 1
+                self.get_logger().info('Second part of the message write done')
+                self.Old_trigger = self.Trigger_Portal
+
+            elif self.Trigger_Portal == 116 and self.mark_1 and not (self.Old_trigger == self.Trigger_Portal):
+                self.Msg_1_write()
+                self.get_logger().info('First part of the message RE-write done')
+                self.Old_trigger = self.Trigger_Portal
+
+            elif self.Trigger_Portal == 120 and self.camStatus and not (self.Old_trigger == self.Trigger_Portal):
+                self.cam_shutdown()
+                self.Old_trigger = self.Trigger_Portal
+
+            elif self.Trigger_Portal == 121 and self.mark_2 and not (self.Old_trigger == self.Trigger_Portal):
+                self.Msg_2_write()
+                self.get_logger().info('Second part of the message RE-write done')
+                self.Old_trigger = self.Trigger_Portal
+
+            elif self.Trigger_Portal == 130 and not (self.Old_trigger == self.Trigger_Portal):
+                self.Msg_Status_write(230)
+                self.get_logger().info('Communication Stage End')
+                self.Old_trigger = self.Trigger_Portal
+
+            elif self.Trigger_Portal == 200 and not (self.Old_trigger == self.Trigger_Portal):
+                self.Clean_Buffer()
+                self.Old_trigger = self.Trigger_Portal
+
+            elif self.Trigger_Portal == 99 and not (self.Old_trigger == self.Trigger_Portal):
+                self.Old_trigger = self.Trigger_Portal
+                # signal shutdown by stopping timer
+                try:
+                    self.get_logger().info('Received exit trigger 99, shutting down node')
+                    rclpy.shutdown()
+                except Exception:
+                    pass
+
+            # remember
+            self.prev_trigger = trigger
+
+    def handle_trigger_110(self):
+        # Call norm_calc service with incrementing sequence
+        seq = 1
+        try:
+            # prepare request
+            req = NormCalcData.Request()
+            req.seq = seq
+            self.get_logger().info('Calling norm_calc service...')
+            future = self.cli.call_async(req)
+            rclpy.spin_until_future_complete(self, future, timeout_sec=10.0)
+            if future.result() is not None:
+                resp = future.result()
+                num_points = len(resp.pose_list.poses)
+                self.get_logger().info(f'norm_calc returned {num_points} poses')
+
+                # Prepare a simple reply: write status(100/99) and number of points into DB
+                status = 100 if num_points > 0 else 99
+                # Build bytes: status uint16 (big-endian), num_points uint16
+                out = (int(status)).to_bytes(2, byteorder='big') + (int(num_points)).to_bytes(2, byteorder='big')
+                # Pad to at least 8 bytes
+                out = out.ljust(8, b'\x00')
+                ok = self.write_db_area(out, start=self.db_start+2)
+                if ok:
+                    self.get_logger().info('Wrote result back to PLC DB')
+                else:
+                    self.get_logger().error('Failed to write result to PLC')
+            else:
+                self.get_logger().error('Service call failed or timed out')
+        except Exception as e:
+            self.get_logger().error(f'Exception while calling service: {e}')
+
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = PLCClientNode()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        try:
+            if node.client:
+                node.client.disconnect()
+        except Exception:
+            pass
+        node.destroy_node()
+        rclpy.shutdown()
+
+
+if __name__ == '__main__':
+    main()
