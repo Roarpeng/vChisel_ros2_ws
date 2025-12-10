@@ -76,6 +76,10 @@ class PLCClientNode(Node):
         self.Old_trigger = 0
         self.Trigger_Portal = 0
         self.time_stamp = time.localtime()
+        
+        # 用于相机状态监控的额外变量
+        self.camera_disconnect_count = 0  # 记录连续检测到断开的次数
+        self.max_disconnect_threshold = 3  # 连续检测到断开的最大阈值
 
         # buffers for pages
         self.Output_Status = []
@@ -373,37 +377,115 @@ class PLCClientNode(Node):
             self.write_registers_uint16(out, start=20)
 
     def cam_bringup(self):
-        if self.camStatus:
-            self.get_logger().info('Camera already launched')
-            return
+        # 首先确保之前的相机进程被终止
+        if self.cam_proc and self.cam_proc.poll() is None:
+            self.get_logger().info('Terminating existing camera process before starting new one...')
+            try:
+                self.cam_proc.terminate()
+                try:
+                    self.cam_proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    self.cam_proc.kill()
+                    self.get_logger().info('Killed existing camera process that did not terminate gracefully')
+            except Exception as e:
+                self.get_logger().warning(f'Error terminating existing camera process: {e}')
+        
+        # 重置相机状态和断开计数器
+        self.camStatus = False
+        self.camera_disconnect_count = 0
+        time.sleep(1)  # 等待一段时间确保旧进程完全终止
+        
+        # 重试机制：最多尝试5次
+        max_attempts = 5
+        for attempt in range(max_attempts):
+            self.get_logger().info(f'Camera startup attempt {attempt + 1}/{max_attempts}')
+            
+            # 每次尝试时都检查物理连接
+            if not self.check_physical_camera_connection_stable():
+                self.get_logger().info(f'Physical camera not connected on attempt {attempt + 1}, waiting for connection...')
+                # 在等待一段时间后再次尝试
+                time.sleep(2)
+                continue
 
-        try:
-            cmd = ['ros2', 'run', 'realsense2_camera', 'realsense2_camera_node']
-            self.cam_proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            self.camStatus = True
-            time.sleep(2)  # 增加等待时间确保相机完全启动
-            if self.cam_proc.poll() is not None:
-                self.get_logger().error(f'Camera process exited immediately with code {self.cam_proc.poll()}')
-                self.camStatus = False
-                # 发送错误状态到PLC
-                self.write_registers_uint16([999], start=16)
+            # 再次检查是否已经有运行中的进程（可能在等待期间启动了）
+            if self.camStatus:
+                self.get_logger().info('Camera already launched')
                 return
-            self.get_logger().info('Camera process started')
-            
-            # 添加相机状态监控
-            self.camera_monitor_thread = threading.Thread(target=self._monitor_camera_status, daemon=True)
-            self.camera_monitor_thread.start()
-            
-        except FileNotFoundError:
-            self.get_logger().error('ros2 executable not found. Ensure ROS2 is sourced.')
-            self.write_registers_uint16([999], start=16)  # 发送错误代码
-        except Exception as e:
-            self.get_logger().error(f'Failed to start camera process: {e}')
+
+            try:
+                cmd = ['ros2', 'run', 'realsense2_camera', 'realsense2_camera_node']
+                self.cam_proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                self.camStatus = True
+                time.sleep(3)  # 增加等待时间确保相机完全启动
+                
+                if self.cam_proc.poll() is not None:
+                    self.get_logger().error(f'Camera process exited immediately with code {self.cam_proc.poll()} on attempt {attempt + 1}')
+                    self.camStatus = False
+                    # 终止进程并准备重试
+                    try:
+                        if self.cam_proc and self.cam_proc.poll() is None:
+                            self.cam_proc.terminate()
+                            try:
+                                self.cam_proc.wait(timeout=5)
+                            except subprocess.TimeoutExpired:
+                                self.cam_proc.kill()
+                                self.get_logger().info(f'Killed failed camera process on attempt {attempt + 1}')
+                    except:
+                        pass
+                    # 在重试前稍等
+                    time.sleep(2)
+                    continue
+                self.get_logger().info('Camera process started successfully')
+                
+                # 添加相机状态监控
+                if hasattr(self, 'camera_monitor_thread') and self.camera_monitor_thread.is_alive():
+                    # 如果已有监控线程在运行，先等待它结束
+                    try:
+                        self.camera_monitor_thread.join(timeout=1)  # 等待最多1秒
+                    except:
+                        pass
+                
+                self.camera_monitor_thread = threading.Thread(target=self._monitor_camera_status, daemon=True)
+                self.camera_monitor_thread.start()
+                
+                # 成功启动后退出循环
+                break
+                
+            except FileNotFoundError:
+                self.get_logger().error('ros2 executable not found. Ensure ROS2 is sourced.')
+                self.camStatus = False  # 确保将状态设为False，以便后续可以重试
+                self.write_registers_uint16([999], start=16)  # 发送错误代码
+                return
+            except Exception as e:
+                self.get_logger().error(f'Failed to start camera process on attempt {attempt + 1}: {e}')
+                self.camStatus = False  # 确保将状态设为False，以便后续可以重试
+                # 终止进程并准备重试
+                try:
+                    if self.cam_proc and self.cam_proc.poll() is None:
+                        self.cam_proc.terminate()
+                        try:
+                            self.cam_proc.wait(timeout=5)
+                        except subprocess.TimeoutExpired:
+                            self.cam_proc.kill()
+                            self.get_logger().info(f'Killed failed camera process on attempt {attempt + 1}')
+                except:
+                    pass
+                # 在重试前稍等
+                time.sleep(2)
+        
+        # 如果所有尝试都失败了
+        if not self.camStatus:
+            self.get_logger().error(f'Failed to start camera after {max_attempts} attempts')
             self.write_registers_uint16([999], start=16)  # 发送错误代码
 
     def cam_shutdown(self):
         if not self.camStatus:
             self.get_logger().info('Camera not running')
+            # 即使相机没有运行，也要确保状态被正确重置
+            self.camStatus = False
+            self.mark_1 = 0
+            self.mark_2 = 0
+            self.pakg_new = 0
             return
 
         try:
@@ -416,6 +498,7 @@ class PLCClientNode(Node):
         except Exception as e:
             self.get_logger().warning(f'Error terminating camera process: {e}')
 
+        # 确保所有相关状态都被重置
         self.camStatus = False
         self.mark_1 = 0
         self.mark_2 = 0
@@ -424,8 +507,28 @@ class PLCClientNode(Node):
 
     def _monitor_camera_status(self):
         """监控相机进程状态，检测意外断开"""
+        # 重置断开计数器
+        self.camera_disconnect_count = 0
+        
         while self.camStatus and rclpy.ok():
             try:
+                # 检查物理连接 - 使用更稳定的检测方法
+                if not self.check_physical_camera_connection_stable():
+                    self.camera_disconnect_count += 1
+                    self.get_logger().warning(f'Physical camera disconnected (count: {self.camera_disconnect_count})')
+                    
+                    # 只有当连续检测到断开超过阈值时，才认为相机真正断开
+                    if self.camera_disconnect_count >= self.max_disconnect_threshold:
+                        self.get_logger().warning('Physical camera disconnected permanently, stopping camera')
+                        # 设置相机状态为断开
+                        self.camStatus = False
+                        # 向PLC发送错误状态
+                        self.write_registers_uint16([999], start=16)  # 发送错误代码
+                        break
+                else:
+                    # 如果检测到连接，重置断开计数器
+                    self.camera_disconnect_count = 0
+                
                 if self.cam_proc and self.cam_proc.poll() is not None:
                     # 相机进程意外退出
                     self.get_logger().warning(f'Camera process unexpectedly terminated with code {self.cam_proc.poll()}')
@@ -433,7 +536,7 @@ class PLCClientNode(Node):
                     # 向PLC发送错误状态
                     self.write_registers_uint16([999], start=16)  # 发送错误代码
                     break
-                time.sleep(1)  # 每秒检查一次
+                time.sleep(2)  # 增加检查间隔到2秒，减少频繁检查的干扰
             except Exception as e:
                 self.get_logger().error(f'Error in camera monitoring thread: {e}')
                 break
@@ -448,13 +551,85 @@ class PLCClientNode(Node):
             self.camStatus = False
             return False
 
+    def wait_for_camera_ready(self, timeout=15):
+        """等待相机准备好，不仅检查进程和物理连接，还等待一段时间让相机初始化"""
+        start_time = time.time()
+        self.get_logger().info('Waiting for camera to be fully ready...')
+        
+        # 先检查物理连接和进程状态
+        while time.time() - start_time < timeout:
+            if self.check_camera_connection() and self.check_physical_camera_connection():
+                self.get_logger().info('Camera process and physical connection OK, waiting for initialization...')
+                # 如果进程和物理连接都正常，等待一段时间让相机完全初始化
+                time.sleep(3)  # 等待3秒让相机完全初始化
+                
+                # 再次检查是否仍然连接正常
+                if self.check_camera_connection() and self.check_physical_camera_connection():
+                    self.get_logger().info('Camera is fully ready')
+                    return True
+                else:
+                    self.get_logger().info('Camera connection lost during initialization wait')
+            time.sleep(0.5)
+        return False
+
+    def check_physical_camera_connection(self):
+        """检查物理相机连接状态，使用多次检测减少误报"""
+        try:
+            # 尝试使用pyrealsense2来检测物理设备
+            import pyrealsense2 as rs
+            try:
+                ctx = rs.context()
+                devices = ctx.query_devices()
+                if len(devices) > 0:
+                    # 检查设备是否可访问
+                    for device in devices:
+                        try:
+                            device_name = device.get_info(rs.camera_info.name) if device else "Unknown"
+                            serial_number = device.get_info(rs.camera_info.serial_number) if device else "Unknown"
+                            self.get_logger().debug(f'Physical RealSense Camera Found: {device_name}, Serial: {serial_number}')
+                            return True
+                        except Exception:
+                            continue
+            except Exception as e:
+                self.get_logger().debug(f'Error with pyrealsense2 detection: {e}')
+                
+            return False
+        except ImportError:
+            # 如果pyrealsense2不可用，使用lsusb命令
+            try:
+                import subprocess
+                result = subprocess.run(['lsusb'], capture_output=True, text=True, timeout=5)
+                # 查找Intel RealSense设备
+                for line in result.stdout.split('\n'):
+                    if 'Intel' in line and ('RealSense' in line or '8086:' in line):
+                        return True
+                return False
+            except Exception as e:
+                self.get_logger().warning(f'Error checking physical camera connection: {e}')
+                return False
+        except Exception as e:
+            self.get_logger().warning(f'Error checking physical camera connection: {e}')
+            return False
+
+    def check_physical_camera_connection_stable(self, num_checks=3, interval=0.1):
+        """通过多次检测来确定物理连接状态，减少误报"""
+        true_count = 0
+        for i in range(num_checks):
+            if self.check_physical_camera_connection():
+                true_count += 1
+            if i < num_checks - 1:  # 不在最后一次检查后等待
+                time.sleep(interval)
+        
+        # 如果超过一半的检测结果为真，则认为连接正常
+        return true_count > num_checks / 2
+
     def safe_camera_operation(self):
         """安全的相机操作，包含连接检查"""
-        if not self.check_camera_connection():
-            self.get_logger().warning('Camera not connected, attempting to restart...')
+        if not self.check_camera_connection() or not self.check_physical_camera_connection_stable():
+            self.get_logger().warning('Camera not connected or physically disconnected, attempting to restart...')
             self.cam_bringup()
-            time.sleep(2)  # 等待相机启动
-            if not self.check_camera_connection():
+            time.sleep(3)  # 等待相机启动
+            if not self.check_camera_connection() or not self.check_physical_camera_connection_stable():
                 self.get_logger().error('Failed to establish camera connection')
                 return False
         return True
@@ -466,6 +641,14 @@ class PLCClientNode(Node):
             # 向PLC发送错误状态
             self.write_registers_uint16([998], start=16)  # 相机未启动错误代码
             return
+            
+        # 额外检查物理连接
+        if not self.check_physical_camera_connection():
+            self.get_logger().warning('Physical camera not connected, cannot perform norm calculation')
+            # 向PLC发送错误状态
+            self.write_registers_uint16([998], start=16)  # 相机未启动错误代码
+            return
+            
         if self.pending_norm_future is not None and not self.pending_norm_future.done():
             self.get_logger().warning('Another norm_calc request is pending, skipping')
             return
@@ -588,10 +771,25 @@ class PLCClientNode(Node):
 
             if self.Trigger_Portal == 100 and self.Old_trigger != self.Trigger_Portal:
                 self.get_logger().info('Open the Cam!')
-                if not self.camStatus:
+                
+                # 检查物理连接
+                if not self.check_physical_camera_connection_stable():
+                    self.get_logger().warning('Physical camera not connected, attempting to start camera anyway...')
+                    # 即使物理连接不可用，也要尝试启动相机，因为用户可能刚刚插入了相机
                     self.cam_bringup()
-                # 检查相机是否真的启动成功
-                if self.check_camera_connection():
+                else:
+                    self.get_logger().info('Physical camera detected, proceeding to start camera')
+                    if not self.camStatus:
+                        self.cam_bringup()
+                
+                # 等待相机完全准备好
+                self.get_logger().info('Waiting for camera to be ready...')
+                is_ready = self.wait_for_camera_ready(timeout=15)  # 增加超时时间到15秒
+                self.get_logger().info(f'Camera ready status: {is_ready}')
+                self.get_logger().info(f'Camera process status: {self.check_camera_connection()}')
+                self.get_logger().info(f'Physical camera status: {self.check_physical_camera_connection_stable()}')
+                
+                if is_ready:
                     self.write_registers_uint16([200], start=16)  # 成功启动
                     self.get_logger().info('Camera successfully launched and connected')
                 else:
@@ -617,6 +815,9 @@ class PLCClientNode(Node):
                 self.get_logger().info('[LOG] Clearing buffer and logging data!')
                 self.cam_shutdown()
                 self.write_registers_uint16([0], start=16)
+                # 重置相机状态标志，以便下次100指令时可以重新检测物理连接
+                self.get_logger().info('Camera closed and status reset')
+                self.Old_trigger = self.Trigger_Portal
                 # self.Clean_Buffer()
                 self.Old_trigger = self.Trigger_Portal
 

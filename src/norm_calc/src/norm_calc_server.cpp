@@ -314,25 +314,95 @@ private:
     void imageToPointCloud(cv::Mat colorImg, cv::Mat depthImg, const sensor_msgs::msg::CameraInfo &camInfo, pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud)
     {
         cloud->points.clear();
-        pcl::PointXYZRGB p;
-        cv::Mat grayImg, blurImg;
-        cv::cvtColor(colorImg, grayImg, cv::COLOR_BGR2GRAY);
-        cv::GaussianBlur(grayImg, blurImg, cv::Size(17, 9), 5, 0);
-        for (int row = 0; row < depthImg.rows; row++)
-        {
-            for (int col = 0; col < depthImg.cols; col++)
+        
+        // 检查图像是否为空
+        if (colorImg.empty() || depthImg.empty()) {
+            RCLCPP_ERROR(rclcpp::get_logger("norm_calc"), "Empty color or depth image in imageToPointCloud");
+            return;
+        }
+        
+        // 检查图像尺寸是否匹配
+        if (colorImg.rows != depthImg.rows || colorImg.cols != depthImg.cols) {
+            RCLCPP_WARN(rclcpp::get_logger("norm_calc"), 
+                       "Color and depth image dimensions do not match: color(%dx%d) vs depth(%dx%d)", 
+                       colorImg.cols, colorImg.rows, depthImg.cols, depthImg.rows);
+            // 尝试使用较小的尺寸
+            int rows = std::min(colorImg.rows, depthImg.rows);
+            int cols = std::min(colorImg.cols, depthImg.cols);
+            
+            // 确保相机内参矩阵有足够的元素
+            if (camInfo.k.size() < 9) {
+                RCLCPP_ERROR(rclcpp::get_logger("norm_calc"), "Insufficient camera intrinsic parameters");
+                return;
+            }
+            
+            pcl::PointXYZRGB p;
+            cv::Mat grayImg, blurImg;
+            cv::cvtColor(colorImg(cv::Rect(0, 0, cols, rows)), grayImg, cv::COLOR_BGR2GRAY);
+            cv::GaussianBlur(grayImg, blurImg, cv::Size(17, 9), 5, 0);
+            
+            for (int row = 0; row < rows; row++)
             {
-                p.z = 0.001f * depthImg.at<uint16_t>(row, col);
-                p.x = (col - camInfo.k[2]) / camInfo.k[0] * p.z;
-                p.y = (row - camInfo.k[5]) / camInfo.k[4] * p.z;
-                // colorImg is RGB8: channel order = R, G, B
-                p.r = colorImg.at<uint8_t>(row, col * 3);
-                p.g = colorImg.at<uint8_t>(row, col * 3 + 1);
-                p.b = colorImg.at<uint8_t>(row, col * 3 + 2);
-                p.a = blurImg.at<uint8_t>(row, col);
-                cloud->points.push_back(p);
+                for (int col = 0; col < cols; col++)
+                {
+                    p.z = 0.001f * depthImg.at<uint16_t>(row, col);
+                    p.x = (col - camInfo.k[2]) / camInfo.k[0] * p.z;
+                    p.y = (row - camInfo.k[5]) / camInfo.k[4] * p.z;
+                    
+                    // 确保颜色图像有足够的通道数
+                    if (colorImg.channels() >= 3) {
+                        p.r = colorImg.at<cv::Vec3b>(row, col)[0];  // BGR format
+                        p.g = colorImg.at<cv::Vec3b>(row, col)[1];
+                        p.b = colorImg.at<cv::Vec3b>(row, col)[2];
+                    } else {
+                        p.r = p.g = p.b = 128; // 默认灰色
+                    }
+                    
+                    // 确保blurImg尺寸匹配
+                    if (row < blurImg.rows && col < blurImg.cols) {
+                        p.a = blurImg.at<uint8_t>(row, col);
+                    } else {
+                        p.a = 128; // 默认值
+                    }
+                    
+                    cloud->points.push_back(p);
+                }
+            }
+        } else {
+            // 图像尺寸匹配的情况
+            if (camInfo.k.size() < 9) {
+                RCLCPP_ERROR(rclcpp::get_logger("norm_calc"), "Insufficient camera intrinsic parameters");
+                return;
+            }
+            
+            pcl::PointXYZRGB p;
+            cv::Mat grayImg, blurImg;
+            cv::cvtColor(colorImg, grayImg, cv::COLOR_BGR2GRAY);
+            cv::GaussianBlur(grayImg, blurImg, cv::Size(17, 9), 5, 0);
+            
+            for (int row = 0; row < depthImg.rows; row++)
+            {
+                for (int col = 0; col < depthImg.cols; col++)
+                {
+                    p.z = 0.001f * depthImg.at<uint16_t>(row, col);
+                    p.x = (col - camInfo.k[2]) / camInfo.k[0] * p.z;
+                    p.y = (row - camInfo.k[5]) / camInfo.k[4] * p.z;
+                    
+                    // 使用更安全的颜色访问方式
+                    if (colorImg.channels() >= 3) {
+                        p.r = colorImg.at<cv::Vec3b>(row, col)[2];  // BGR format, R is the 3rd channel
+                        p.g = colorImg.at<cv::Vec3b>(row, col)[1];  // G is the 2nd channel
+                        p.b = colorImg.at<cv::Vec3b>(row, col)[0];  // B is the 1st channel
+                    } else {
+                        p.r = p.g = p.b = 128; // 默认灰色
+                    }
+                    
+                    p.a = blurImg.at<uint8_t>(row, col);
+                    cloud->points.push_back(p);
+                }
             }
         }
+        
         cloud->width = cloud->points.size();
         cloud->height = 1;
         cloud->is_dense = false;
@@ -518,6 +588,19 @@ private:
         outHolesCloud_.header.stamp = now;
         outTriangles_.header.stamp = now;
 
+        // 设置header信息
+        outSmoothedCloud_.header.frame_id = res->pose_list.header.frame_id;
+        outTarPointCloud_.header.frame_id = res->pose_list.header.frame_id;
+        outAllNormCloud_.header.frame_id = res->pose_list.header.frame_id;
+        outHolesCloud_.header.frame_id = res->pose_list.header.frame_id;
+        outTriangles_.header.frame_id = res->pose_list.header.frame_id;
+
+        outSmoothedCloud_.header.stamp = now;
+        outTarPointCloud_.header.stamp = now;
+        outAllNormCloud_.header.stamp = now;
+        outHolesCloud_.header.stamp = now;
+        outTriangles_.header.stamp = now;
+
         // Conditionally publish based on separate data transmission mode
         int pubNum = 0;
         while (pubNum < 2 && rclcpp::ok())
@@ -535,7 +618,7 @@ private:
         }
         
         // 内存清理：清理临时数据结构
-        // 清理输出点云数据
+        // 清理输出点云数据 - 在发布后进行清理
         outSmoothedCloud_.data.clear();
         outSmoothedCloud_.data.shrink_to_fit();
         outTarPointCloud_.data.clear();
