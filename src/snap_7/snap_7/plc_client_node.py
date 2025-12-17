@@ -823,11 +823,11 @@ class PLCClientNode(Node):
                 # Note: rosStatus will be written after processing is complete in _handle_norm_response
                 self.Old_trigger = self.Trigger_Portal
                 
-            elif self.Trigger_Portal == 130 and self.Old_trigger != self.Trigger_Portal:
+            elif self.Trigger_Portal == 130 or 120 and self.Old_trigger != self.Trigger_Portal:
                 self.get_logger().info('Close the Camera!')
                 self.get_logger().info('[LOG] Clearing buffer and logging data!')
                 self.cam_shutdown()
-                self.write_registers_uint16([0], start=16)
+                self.write_registers_uint16([220], start=16)
                 # 重置相机状态标志，以便下次100指令时可以重新检测物理连接
                 self.get_logger().info('Camera closed and status reset')
                 self.Old_trigger = self.Trigger_Portal
