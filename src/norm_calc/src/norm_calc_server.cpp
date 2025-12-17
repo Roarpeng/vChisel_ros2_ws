@@ -161,6 +161,13 @@ private:
     cv::Mat imgColor_;
     cv::Mat imgDepth_ = cv::Mat::zeros(480, 848, CV_16UC1);
     sensor_msgs::msg::CameraInfo camInfo_;
+    
+    // 添加时间戳和数据验证相关变量
+    rclcpp::Time last_img_time_{0, 0, RCL_ROS_TIME};
+    rclcpp::Time last_depth_time_{0, 0, RCL_ROS_TIME};
+    cv::Mat last_imgColor_;
+    cv::Mat last_imgDepth_;
+    double image_diff_threshold_ = 1000.0; // 图像差异阈值
 
     sensor_msgs::msg::PointCloud2 outSmoothedCloud_;
     sensor_msgs::msg::PointCloud2 outTarPointCloud_;
@@ -267,12 +274,38 @@ private:
         {
             try
             {
-                // RCLCPP_INFO(this->get_logger(), "img回调成功!!");
+                // 时间戳验证 - 检查图像是否为新数据
+                auto current_time = this->get_clock()->now();
+                rclcpp::Time image_time(img_msg->header.stamp);
+                auto time_diff = (current_time - image_time).seconds();
+                
+                if (last_img_time_.nanoseconds() > 0 && image_time <= last_img_time_) {
+                    RCLCPP_WARN(this->get_logger(), "Received old or duplicate color image timestamp");
+                    return;
+                }
+                
+                if (time_diff > 2.0) { // 如果图像时间戳超过200ms，则认为可能过期
+                    RCLCPP_WARN(this->get_logger(), "Color image may be stale: %f seconds ago", time_diff);
+                }
 
                 // RealSense publishes color as RGB8; use RGB8 and handle channels accordingly
                 cv_bridge::CvImagePtr cv_ptr = cv_bridge::toCvCopy(img_msg, sensor_msgs::image_encodings::RGB8);
-                imgColor_ = cv_ptr->image;
+                
+                // 数据唯一性检查 - 与上一帧比较
+                if (!last_imgColor_.empty()) {
+                    double diff = cv::norm(cv_ptr->image, last_imgColor_, cv::NORM_L2);
+                    if (diff < image_diff_threshold_) {
+                        RCLCPP_WARN(this->get_logger(), "Color image appears to be duplicate or unchanged (diff: %f)", diff);
+                        return;
+                    }
+                }
+                
+                imgColor_ = cv_ptr->image.clone();
+                last_imgColor_ = imgColor_.clone();
+                last_img_time_ = image_time;
                 img_ready = true;
+                
+                RCLCPP_INFO(this->get_logger(), "New valid color image received, timestamp diff: %f s", time_diff);
             }
             catch (cv_bridge::Exception &e)
             {
@@ -288,10 +321,37 @@ private:
         {
             try
             {
-                // RCLCPP_INFO(this->get_logger(), "depth回调成功!!");
+                // 时间戳验证 - 检查深度图像是否为新数据
+                auto current_time = this->get_clock()->now();
+                rclcpp::Time depth_time(depth_msg->header.stamp);
+                auto time_diff = (current_time - depth_time).seconds();
+                
+                if (last_depth_time_.nanoseconds() > 0 && depth_time <= last_depth_time_) {
+                    RCLCPP_WARN(this->get_logger(), "Received old or duplicate depth image timestamp");
+                    return;
+                }
+                
+                if (time_diff > 0.2) { // 如果深度图像时间戳超过200ms，则认为可能过期
+                    RCLCPP_WARN(this->get_logger(), "Depth image may be stale: %f seconds ago", time_diff);
+                }
+
                 cv_bridge::CvImagePtr cv_ptr = cv_bridge::toCvCopy(depth_msg, sensor_msgs::image_encodings::TYPE_16UC1);
-                imgDepth_ = cv_ptr->image;
+                
+                // 数据唯一性检查 - 与上一帧比较
+                if (!last_imgDepth_.empty()) {
+                    double diff = cv::norm(cv_ptr->image, last_imgDepth_, cv::NORM_L2);
+                    if (diff < image_diff_threshold_) {
+                        RCLCPP_WARN(this->get_logger(), "Depth image appears to be duplicate or unchanged (diff: %f)", diff);
+                        return;
+                    }
+                }
+                
+                imgDepth_ = cv_ptr->image.clone();
+                last_imgDepth_ = imgDepth_.clone();
+                last_depth_time_ = depth_time;
                 depth_ready = true;
+                
+                RCLCPP_INFO(this->get_logger(), "New valid depth image received, timestamp diff: %f s", time_diff);
             }
             catch (cv_bridge::Exception &e)
             {
@@ -419,18 +479,21 @@ private:
 
         img_ShotFlag = depth_ShotFlag = info_ShotFlag = true;//回调信号置1,三个sub线程执行回调，接受相机数据
         
-        // 增加等待时间，原来为1秒，现在为3秒，以适应降低帧率后的情况
+        // 调整等待时间，适应提高帧率到15fps后的情况
         int wait_count = 0;
-        const int max_wait_count = 30; // 30 * 100ms = 3秒
+        const int max_wait_count = 45; // 45 * 100ms = 4.5秒，给更高帧率更多时间
         while (rclcpp::ok() && (!img_ready || !depth_ready || !info_ready)){
             if (wait_count >= max_wait_count) {
-                RCLCPP_ERROR(this->get_logger(), "Camera data timeout after 3 seconds. img_ready:%d, depth_ready:%d, info_ready:%d", 
+                RCLCPP_ERROR(this->get_logger(), "Camera data timeout after 4.5 seconds. img_ready:%d, depth_ready:%d, info_ready:%d", 
                             img_ready, depth_ready, info_ready);
                 img_ShotFlag = depth_ShotFlag = info_ShotFlag = false;//回调信号置0
                 break; // 继续执行，使用可能不完整的数据
             }
             
-            RCLCPP_WARN(this->get_logger(), "NOT ready yet.img_ready:%d,depth_ready:%d,info_ready:%d", img_ready, depth_ready, info_ready);
+            if (wait_count % 10 == 0) { // 每秒打印一次状态
+                RCLCPP_WARN(this->get_logger(), "NOT ready yet.img_ready:%d,depth_ready:%d,info_ready:%d (waited %d.%ds)", 
+                           img_ready, depth_ready, info_ready, wait_count/10, wait_count%10);
+            }
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
             wait_count++;
         }
@@ -462,6 +525,21 @@ private:
         }
 
         img_ready = depth_ready = info_ready = false;
+
+        // 验证数据有效性 - 确保使用的是新数据
+        bool data_is_fresh = true;
+        auto current_time = this->get_clock()->now();
+        auto img_age = (current_time - last_img_time_).seconds();
+        auto depth_age = (current_time - last_depth_time_).seconds();
+        
+        if (img_age > 0.5 || depth_age > 0.5) {
+            RCLCPP_WARN(this->get_logger(), "Using potentially stale data - img age: %f s, depth age: %f s", img_age, depth_age);
+            data_is_fresh = false;
+        }
+        
+        if (!data_is_fresh) {
+            RCLCPP_WARN(this->get_logger(), "Data may not be fresh, but proceeding with calculation");
+        }
 
         // run detectors and processing
         RCLCPP_INFO(this->get_logger(), "hole detect start!");

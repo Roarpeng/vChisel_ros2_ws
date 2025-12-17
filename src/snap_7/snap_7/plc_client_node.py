@@ -417,7 +417,13 @@ class PLCClientNode(Node):
                 return
 
             try:
-                cmd = ['ros2', 'run', 'realsense2_camera', 'realsense2_camera_node']
+                # 修改相机启动参数，提高帧率从10到15fps，并禁用一些可能导致缓存的选项
+                cmd = ['ros2', 'run', 'realsense2_camera', 'realsense2_camera_node',
+                       '--ros-args', '-p', 'color_fps:=15.0', '-p', 'depth_fps:=15.0',
+                       '-p', 'enable_color:=true', '-p', 'enable_depth:=true',
+                       '-p', 'enable_gyro:=false', '-p', 'enable_accel:=false',
+                       '-p', 'enable_infra1:=false', '-p', 'enable_infra2:=false',
+                       '-p', 'publish_tf:=false', '-p', 'align_depth:=true']
                 self.cam_proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 self.camStatus = True
                 time.sleep(3)  # 增加等待时间确保相机完全启动
