@@ -21,7 +21,7 @@
 #include "norm_calc/chisel_box.h"
 #include "norm_calc/edge_grid.h"
 
-#define MULTI_FRAME_NUM 5
+#define MULTI_FRAME_NUM 3
 #define Cam2Tool_TF
 #define Tool2World
 
@@ -167,8 +167,7 @@ private:
     rclcpp::Time last_depth_time_{0, 0, RCL_ROS_TIME};
     cv::Mat last_imgColor_;
     cv::Mat last_imgDepth_;
-    double image_diff_threshold_ = 500.0; // 降低图像差异阈值从1000到500
-    double relative_diff_threshold_ = 0.05; // 相对差异阈值5%
+    double image_diff_threshold_ = 1000.0; // 图像差异阈值
 
     sensor_msgs::msg::PointCloud2 outSmoothedCloud_;
     sensor_msgs::msg::PointCloud2 outTarPointCloud_;
@@ -181,19 +180,6 @@ private:
 
     bool img_ShotFlag = false, depth_ShotFlag = false, info_ShotFlag = false;
     bool img_ready = false, depth_ready = false, info_ready = false;
-
-    // 点云质量监控相关
-    struct CloudQualityMetrics {
-        float point_density = 0.0f;
-        float depth_variance = 0.0f;
-        float coverage_ratio = 0.0f;
-        float overall_score = 0.0f;
-        size_t total_points = 0;
-    };
-    
-    CloudQualityMetrics evaluateCloudQuality(pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud);
-    float calculateDepthVariance(pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud);
-    float calculateCoverageRatio(pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud);
 
 
     // Using Quaternion represent the rotation
@@ -305,14 +291,11 @@ private:
                 // RealSense publishes color as RGB8; use RGB8 and handle channels accordingly
                 cv_bridge::CvImagePtr cv_ptr = cv_bridge::toCvCopy(img_msg, sensor_msgs::image_encodings::RGB8);
                 
-                // 数据唯一性检查 - 与上一帧比较（使用绝对和相对差异）
+                // 数据唯一性检查 - 与上一帧比较
                 if (!last_imgColor_.empty()) {
-                    double abs_diff = cv::norm(cv_ptr->image, last_imgColor_, cv::NORM_L2);
-                    double mean_intensity = cv::mean(last_imgColor_)[0];
-                    double rel_diff = mean_intensity > 0 ? abs_diff / (mean_intensity * last_imgColor_.total()) : 0.0;
-                    
-                    if (abs_diff < image_diff_threshold_ && rel_diff < relative_diff_threshold_) {
-                        RCLCPP_DEBUG(this->get_logger(), "Color image appears to be duplicate (abs: %f, rel: %f)", abs_diff, rel_diff);
+                    double diff = cv::norm(cv_ptr->image, last_imgColor_, cv::NORM_L2);
+                    if (diff < image_diff_threshold_) {
+                        RCLCPP_WARN(this->get_logger(), "Color image appears to be duplicate or unchanged (diff: %f)", diff);
                         return;
                     }
                 }
@@ -354,14 +337,11 @@ private:
 
                 cv_bridge::CvImagePtr cv_ptr = cv_bridge::toCvCopy(depth_msg, sensor_msgs::image_encodings::TYPE_16UC1);
                 
-                // 数据唯一性检查 - 与上一帧比较（使用绝对和相对差异）
+                // 数据唯一性检查 - 与上一帧比较
                 if (!last_imgDepth_.empty()) {
-                    double abs_diff = cv::norm(cv_ptr->image, last_imgDepth_, cv::NORM_L2);
-                    double mean_intensity = cv::mean(last_imgDepth_)[0];
-                    double rel_diff = mean_intensity > 0 ? abs_diff / (mean_intensity * last_imgDepth_.total()) : 0.0;
-                    
-                    if (abs_diff < image_diff_threshold_ && rel_diff < relative_diff_threshold_) {
-                        RCLCPP_DEBUG(this->get_logger(), "Depth image appears to be duplicate (abs: %f, rel: %f)", abs_diff, rel_diff);
+                    double diff = cv::norm(cv_ptr->image, last_imgDepth_, cv::NORM_L2);
+                    if (diff < image_diff_threshold_) {
+                        RCLCPP_WARN(this->get_logger(), "Depth image appears to be duplicate or unchanged (diff: %f)", diff);
                         return;
                     }
                 }
@@ -403,16 +383,12 @@ private:
         
         // 检查图像尺寸是否匹配
         if (colorImg.rows != depthImg.rows || colorImg.cols != depthImg.cols) {
-            RCLCPP_INFO(rclcpp::get_logger("norm_calc"), 
+            RCLCPP_WARN(rclcpp::get_logger("norm_calc"), 
                        "Color and depth image dimensions do not match: color(%dx%d) vs depth(%dx%d)", 
                        colorImg.cols, colorImg.rows, depthImg.cols, depthImg.rows);
-            
-            // 将彩色图像缩放到深度图像尺寸以确保匹配
-            cv::Mat resized_color;
-            cv::resize(colorImg, resized_color, cv::Size(depthImg.cols, depthImg.rows), 0, 0, cv::INTER_LINEAR);
-            
-            int rows = depthImg.rows;
-            int cols = depthImg.cols;
+            // 尝试使用较小的尺寸
+            int rows = std::min(colorImg.rows, depthImg.rows);
+            int cols = std::min(colorImg.cols, depthImg.cols);
             
             // 确保相机内参矩阵有足够的元素
             if (camInfo.k.size() < 9) {
@@ -422,7 +398,7 @@ private:
             
             pcl::PointXYZRGB p;
             cv::Mat grayImg, blurImg;
-            cv::cvtColor(resized_color, grayImg, cv::COLOR_BGR2GRAY);
+            cv::cvtColor(colorImg(cv::Rect(0, 0, cols, rows)), grayImg, cv::COLOR_BGR2GRAY);
             cv::GaussianBlur(grayImg, blurImg, cv::Size(17, 9), 5, 0);
             
             for (int row = 0; row < rows; row++)
@@ -430,21 +406,25 @@ private:
                 for (int col = 0; col < cols; col++)
                 {
                     p.z = 0.001f * depthImg.at<uint16_t>(row, col);
-                    if (p.z <= 0.0f) continue; // 跳过无效深度
-                    
                     p.x = (col - camInfo.k[2]) / camInfo.k[0] * p.z;
                     p.y = (row - camInfo.k[5]) / camInfo.k[4] * p.z;
                     
-                    // 使用调整后的彩色图像
-                    if (resized_color.channels() >= 3) {
-                        p.r = resized_color.at<cv::Vec3b>(row, col)[2];  // BGR format, R is 3rd channel
-                        p.g = resized_color.at<cv::Vec3b>(row, col)[1];  // G is 2nd channel
-                        p.b = resized_color.at<cv::Vec3b>(row, col)[0];  // B is 1st channel
+                    // 确保颜色图像有足够的通道数
+                    if (colorImg.channels() >= 3) {
+                        p.r = colorImg.at<cv::Vec3b>(row, col)[0];  // BGR format
+                        p.g = colorImg.at<cv::Vec3b>(row, col)[1];
+                        p.b = colorImg.at<cv::Vec3b>(row, col)[2];
                     } else {
                         p.r = p.g = p.b = 128; // 默认灰色
                     }
                     
-                    p.a = blurImg.at<uint8_t>(row, col);
+                    // 确保blurImg尺寸匹配
+                    if (row < blurImg.rows && col < blurImg.cols) {
+                        p.a = blurImg.at<uint8_t>(row, col);
+                    } else {
+                        p.a = 128; // 默认值
+                    }
+                    
                     cloud->points.push_back(p);
                 }
             }
@@ -496,14 +476,6 @@ private:
         rclcpp::Rate rate(10);
         memset(tarPointList_, 0, sizeof(tarPointList_));
         frameNum_ = 0;
-
-        // Clear buffers and history to force fresh data acquisition
-        imgColor_ = cv::Mat();
-        imgDepth_ = cv::Mat();
-        last_imgColor_ = cv::Mat();
-        last_imgDepth_ = cv::Mat();
-        last_img_time_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
-        last_depth_time_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
 
         img_ShotFlag = depth_ShotFlag = info_ShotFlag = true;//回调信号置1,三个sub线程执行回调，接受相机数据
         
@@ -569,18 +541,77 @@ private:
             RCLCPP_WARN(this->get_logger(), "Data may not be fresh, but proceeding with calculation");
         }
 
-// 简化的单帧处理 - 保留图像尺寸匹配修复
-        RCLCPP_INFO(this->get_logger(), "Processing camera data...");
+// 多帧融合处理 - 增加点云密度
+        pcl::PointCloud<pcl::PointXYZRGB>::Ptr accumulated_cloud(new pcl::PointCloud<pcl::PointXYZRGB>);
+        pcl::PointCloud<pcl::PointXYZ>::Ptr accumulated_holes(new pcl::PointCloud<pcl::PointXYZ>);
         
-        // 执行孔洞检测和点云转换
-        holeDetector(imgColor_, imgDepth_, camInfo_, cloud_holes_);
-        imageToPointCloud(imgColor_, imgDepth_, camInfo_, cloud_);
+        RCLCPP_INFO(this->get_logger(), "Starting multi-frame accumulation (%d frames)...", MULTI_FRAME_NUM);
         
-        RCLCPP_INFO(this->get_logger(), "hole detect done, holes size=%zu", cloud_holes_->size());
-        RCLCPP_INFO(this->get_logger(), "image->pointcloud done, cloud size=%zu", cloud_->points.size());
-        RCLCPP_INFO(this->get_logger(), "norm calc start!");
-        normCalc(cloud_holes_, cloud_, cloud_downSampled_, cloud_filtered_, cloud_smoothed_, cloud_normals_, cloud_with_normals_, cloud_shrink_, cloud_tarPoint_, triangles_, tarPointList_, inChiselParam, inGridParam);
-        RCLCPP_INFO(this->get_logger(), "norm calc done, tarPoint size maybe=%zu", cloud_tarPoint_->points.size());
+        for (int frame = 0; frame < MULTI_FRAME_NUM && rclcpp::ok(); frame++) {
+            // 等待新帧数据
+            img_ShotFlag = depth_ShotFlag = info_ShotFlag = true;
+            img_ready = depth_ready = info_ready = false;
+            
+            // 等待数据就绪
+            int wait_count = 0;
+            const int max_wait = 30; // 3秒超时
+            while ((!img_ready || !depth_ready || !info_ready) && wait_count < max_wait && rclcpp::ok()) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                wait_count++;
+            }
+            
+            img_ShotFlag = depth_ShotFlag = info_ShotFlag = false;
+            
+            if (img_ready && depth_ready && info_ready) {
+                // 处理当前帧
+                pcl::PointCloud<pcl::PointXYZ>::Ptr frame_holes(new pcl::PointCloud<pcl::PointXYZ>);
+                pcl::PointCloud<pcl::PointXYZRGB>::Ptr frame_cloud(new pcl::PointCloud<pcl::PointXYZRGB>);
+                
+                holeDetector(imgColor_, imgDepth_, camInfo_, frame_holes);
+                imageToPointCloud(imgColor_, imgDepth_, camInfo_, frame_cloud);
+                
+                // 累积数据
+                if (frame_cloud->points.size() > 1000) { // 确保有足够的点
+                    *accumulated_cloud += *frame_cloud;
+                    if (frame_holes->points.size() > 0) {
+                        *accumulated_holes += *frame_holes;
+                    }
+                    RCLCPP_INFO(this->get_logger(), "Frame %d accumulated: %zu points, %zu holes", 
+                               frame + 1, frame_cloud->points.size(), frame_holes->points.size());
+                } else {
+                    RCLCPP_WARN(this->get_logger(), "Frame %d skipped: insufficient points (%zu)", 
+                               frame + 1, frame_cloud->points.size());
+                }
+                
+                img_ready = depth_ready = info_ready = false;
+                
+                // 帧间间隔，确保获取不同时刻的数据
+                if (frame < MULTI_FRAME_NUM - 1) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(150)); // 150ms间隔
+                }
+            } else {
+                RCLCPP_WARN(this->get_logger(), "Frame %d timeout, using available data", frame + 1);
+            }
+        }
+        
+        // 使用累积的数据
+        if (accumulated_cloud->points.size() > 5000) { // 确保有足够的数据
+            *cloud_ = *accumulated_cloud;
+            *cloud_holes_ = *accumulated_holes;
+            
+            RCLCPP_INFO(this->get_logger(), "Multi-frame accumulation complete: %zu points, %zu holes", 
+                       cloud_->points.size(), cloud_holes_->size());
+            RCLCPP_INFO(this->get_logger(), "norm calc start!");
+            normCalc(cloud_holes_, cloud_, cloud_downSampled_, cloud_filtered_, cloud_smoothed_, cloud_normals_, cloud_with_normals_, cloud_shrink_, cloud_tarPoint_, triangles_, tarPointList_, inChiselParam, inGridParam);
+            RCLCPP_INFO(this->get_logger(), "norm calc done, tarPoint size maybe=%zu", cloud_tarPoint_->points.size());
+        } else {
+            RCLCPP_ERROR(this->get_logger(), "Insufficient accumulated data (%zu points), falling back to single frame", accumulated_cloud->points.size());
+            
+            // 回退到单帧处理
+            holeDetector(imgColor_, imgDepth_, camInfo_, cloud_holes_);
+            imageToPointCloud(imgColor_, imgDepth_, camInfo_, cloud_);
+            normCalc(cloud_holes_, cloud_, cloud_downSampled_, cloud_filtered_, cloud_smoothed_, cloud_normals_, cloud_with_normals_, cloud_shrink_, cloud_tarPoint_, triangles_, tarPointList_, inChiselParam, inGridParam);
+        }
         
         
 
@@ -755,103 +786,6 @@ private:
         memset(tarPointList_, 0, sizeof(tarPointList_));
     }
 };
-
-// 点云质量监控实现
-NormCalcServer::CloudQualityMetrics NormCalcServer::evaluateCloudQuality(pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud)
-{
-    CloudQualityMetrics metrics;
-    
-    if (cloud->points.empty()) {
-        RCLCPP_WARN(rclcpp::get_logger("norm_calc"), "Empty cloud for quality evaluation");
-        return metrics;
-    }
-    
-    metrics.total_points = cloud->points.size();
-    
-    // 1. 计算点密度（点数/工作区域体积）
-    float working_area_volume = (inChiselParam.XMAX - inChiselParam.XMIN) * 
-                               (inChiselParam.YMAX - inChiselParam.YMIN) * 
-                               (inChiselParam.ZMAX - inChiselParam.ZMIN);
-    metrics.point_density = working_area_volume > 0 ? metrics.total_points / working_area_volume : 0.0f;
-    
-    // 2. 计算深度方差
-    metrics.depth_variance = calculateDepthVariance(cloud);
-    
-    // 3. 计算覆盖率（在有效工作区域内的点比例）
-    metrics.coverage_ratio = calculateCoverageRatio(cloud);
-    
-    // 4. 综合质量评分
-    float density_score = std::min(metrics.point_density / 1000.0f, 1.0f) * 0.4f;
-    float variance_score = std::min(metrics.depth_variance / 0.01f, 1.0f) * 0.3f;
-    float coverage_score = metrics.coverage_ratio * 0.3f;
-    
-    metrics.overall_score = density_score + variance_score + coverage_score;
-    
-    return metrics;
-}
-
-float NormCalcServer::calculateDepthVariance(pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud)
-{
-    if (cloud->points.size() < 2) return 0.0f;
-    
-    // 计算Z值的均值和方差
-    double sum_z = 0.0;
-    size_t valid_points = 0;
-    
-    for (const auto& point : cloud->points) {
-        if (std::isfinite(point.z)) {
-            sum_z += point.z;
-            valid_points++;
-        }
-    }
-    
-    if (valid_points == 0) return 0.0f;
-    
-    double mean_z = sum_z / valid_points;
-    double sum_variance = 0.0;
-    
-    for (const auto& point : cloud->points) {
-        if (std::isfinite(point.z)) {
-            double diff = point.z - mean_z;
-            sum_variance += diff * diff;
-        }
-    }
-    
-    return valid_points > 1 ? static_cast<float>(sum_variance / (valid_points - 1)) : 0.0f;
-}
-
-float NormCalcServer::calculateCoverageRatio(pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud)
-{
-    if (cloud->points.empty()) return 0.0f;
-    
-    // 将工作区域划分为网格，计算有数据的网格比例
-    const int grid_size = 20; // 20x20网格
-    const float x_step = (inChiselParam.XMAX - inChiselParam.XMIN) / grid_size;
-    const float y_step = (inChiselParam.YMAX - inChiselParam.YMIN) / grid_size;
-    
-    std::vector<std::vector<bool>> grid(grid_size, std::vector<bool>(grid_size, false));
-    
-    for (const auto& point : cloud->points) {
-        if (std::isfinite(point.x) && std::isfinite(point.y)) {
-            int x_idx = static_cast<int>((point.x - inChiselParam.XMIN) / x_step);
-            int y_idx = static_cast<int>((point.y - inChiselParam.YMIN) / y_step);
-            
-            if (x_idx >= 0 && x_idx < grid_size && y_idx >= 0 && y_idx < grid_size) {
-                grid[x_idx][y_idx] = true;
-            }
-        }
-    }
-    
-    // 计算被覆盖的网格数量
-    size_t covered_cells = 0;
-    for (int i = 0; i < grid_size; i++) {
-        for (int j = 0; j < grid_size; j++) {
-            if (grid[i][j]) covered_cells++;
-        }
-    }
-    
-    return static_cast<float>(covered_cells) / (grid_size * grid_size);
-}
 
 int main(int argc, char **argv)
 {
