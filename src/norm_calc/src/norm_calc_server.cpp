@@ -497,6 +497,14 @@ private:
         memset(tarPointList_, 0, sizeof(tarPointList_));
         frameNum_ = 0;
 
+        // Clear buffers and history to force fresh data acquisition
+        imgColor_ = cv::Mat();
+        imgDepth_ = cv::Mat();
+        last_imgColor_ = cv::Mat();
+        last_imgDepth_ = cv::Mat();
+        last_img_time_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
+        last_depth_time_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
+
         img_ShotFlag = depth_ShotFlag = info_ShotFlag = true;//回调信号置1,三个sub线程执行回调，接受相机数据
         
         // 调整等待时间，适应提高帧率到15fps后的情况
