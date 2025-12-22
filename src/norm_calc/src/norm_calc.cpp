@@ -50,22 +50,26 @@ bool normCalc(pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_holes,
                               (chiselParam.ZMAX - chiselParam.ZMIN);
   float point_density = cloud_filtered->points.size() / working_area_volume;
   
-  // 自适应体素大小
+  // 自适应体素大小 - 更保守的调整策略
   float base_leaf_size = 0.0025f;
   float adaptive_leaf_size = base_leaf_size;
   
-  if (point_density < 500) {  // 低密度区域，保留更多细节
+  // 调整密度阈值，避免过度下采样
+  if (point_density < 1000) {  // 低密度区域，保留更多细节
     adaptive_leaf_size = 0.0015f;
     cout << "Low density detected (" << point_density << "), using smaller leaf size: " << adaptive_leaf_size << endl;
-  } else if (point_density > 2000) {  // 高密度区域，可以适当增大体素
-    adaptive_leaf_size = 0.0035f;
-    cout << "High density detected (" << point_density << "), using larger leaf size: " << adaptive_leaf_size << endl;
+  } else if (point_density > 10000) {  // 极高密度区域才增大体素
+    adaptive_leaf_size = 0.0030f;
+    cout << "Very high density detected (" << point_density << "), using larger leaf size: " << adaptive_leaf_size << endl;
+  } else if (point_density > 5000) {  // 中高密度区域
+    adaptive_leaf_size = 0.0020f;
+    cout << "Medium-high density detected (" << point_density << "), using moderate leaf size: " << adaptive_leaf_size << endl;
   } else {
     cout << "Normal density (" << point_density << "), using base leaf size: " << adaptive_leaf_size << endl;
   }
   
-  // 确保体素大小在合理范围内
-  adaptive_leaf_size = std::max(0.001f, std::min(0.005f, adaptive_leaf_size));
+  // 确保体素大小在合理范围内，更保守的限制
+  adaptive_leaf_size = std::max(0.001f, std::min(0.003f, adaptive_leaf_size));
   
   downSampled.setLeafSize (adaptive_leaf_size, adaptive_leaf_size, adaptive_leaf_size);
   downSampled.filter (*cloud_downSampled);          //执行滤波处理，存储输出

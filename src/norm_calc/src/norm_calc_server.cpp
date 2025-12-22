@@ -403,12 +403,16 @@ private:
         
         // 检查图像尺寸是否匹配
         if (colorImg.rows != depthImg.rows || colorImg.cols != depthImg.cols) {
-            RCLCPP_WARN(rclcpp::get_logger("norm_calc"), 
+            RCLCPP_INFO(rclcpp::get_logger("norm_calc"), 
                        "Color and depth image dimensions do not match: color(%dx%d) vs depth(%dx%d)", 
                        colorImg.cols, colorImg.rows, depthImg.cols, depthImg.rows);
-            // 尝试使用较小的尺寸
-            int rows = std::min(colorImg.rows, depthImg.rows);
-            int cols = std::min(colorImg.cols, depthImg.cols);
+            
+            // 将彩色图像缩放到深度图像尺寸以确保匹配
+            cv::Mat resized_color;
+            cv::resize(colorImg, resized_color, cv::Size(depthImg.cols, depthImg.rows), 0, 0, cv::INTER_LINEAR);
+            
+            int rows = depthImg.rows;
+            int cols = depthImg.cols;
             
             // 确保相机内参矩阵有足够的元素
             if (camInfo.k.size() < 9) {
@@ -418,7 +422,7 @@ private:
             
             pcl::PointXYZRGB p;
             cv::Mat grayImg, blurImg;
-            cv::cvtColor(colorImg(cv::Rect(0, 0, cols, rows)), grayImg, cv::COLOR_BGR2GRAY);
+            cv::cvtColor(resized_color, grayImg, cv::COLOR_BGR2GRAY);
             cv::GaussianBlur(grayImg, blurImg, cv::Size(17, 9), 5, 0);
             
             for (int row = 0; row < rows; row++)
@@ -426,25 +430,21 @@ private:
                 for (int col = 0; col < cols; col++)
                 {
                     p.z = 0.001f * depthImg.at<uint16_t>(row, col);
+                    if (p.z <= 0.0f) continue; // 跳过无效深度
+                    
                     p.x = (col - camInfo.k[2]) / camInfo.k[0] * p.z;
                     p.y = (row - camInfo.k[5]) / camInfo.k[4] * p.z;
                     
-                    // 确保颜色图像有足够的通道数
-                    if (colorImg.channels() >= 3) {
-                        p.r = colorImg.at<cv::Vec3b>(row, col)[0];  // BGR format
-                        p.g = colorImg.at<cv::Vec3b>(row, col)[1];
-                        p.b = colorImg.at<cv::Vec3b>(row, col)[2];
+                    // 使用调整后的彩色图像
+                    if (resized_color.channels() >= 3) {
+                        p.r = resized_color.at<cv::Vec3b>(row, col)[2];  // BGR format, R is 3rd channel
+                        p.g = resized_color.at<cv::Vec3b>(row, col)[1];  // G is 2nd channel
+                        p.b = resized_color.at<cv::Vec3b>(row, col)[0];  // B is 1st channel
                     } else {
                         p.r = p.g = p.b = 128; // 默认灰色
                     }
                     
-                    // 确保blurImg尺寸匹配
-                    if (row < blurImg.rows && col < blurImg.cols) {
-                        p.a = blurImg.at<uint8_t>(row, col);
-                    } else {
-                        p.a = 128; // 默认值
-                    }
-                    
+                    p.a = blurImg.at<uint8_t>(row, col);
                     cloud->points.push_back(p);
                 }
             }
