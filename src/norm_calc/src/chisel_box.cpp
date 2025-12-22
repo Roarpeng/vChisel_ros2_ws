@@ -74,8 +74,6 @@ bool ChiselBox::voteTarPoint(pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud,
   indexRow    = row;
   indexColumn = column;
 
-  // 初始化bestScore为一个很小的值，确保任何有效分数都能被记录
-  bestScore = -1000.0f;
   size_t thOver = 0;
 
   if(num > 0)
@@ -225,10 +223,10 @@ bool ChiselBox::voteTarPoint(pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud,
       }
     }
 
-    RCLCPP_INFO(rclcpp::get_logger("rclcpp"), "THOVER = %d, bestScore = %f", thOver, bestScore);
+    RCLCPP_INFO(rclcpp::get_logger("rclcpp"), "THOVER = %d", thOver);
 
-    // 修改条件：只要有候选点就选择最优的，而不是要求正分数
-    if (num > thOver && bestIndex > 0) // 确保有足够的有效点
+    
+    if (bestScore > 0.0f)
     {
       isTarExist        = true;
       bestPoint.status  = true;
@@ -239,15 +237,10 @@ bool ChiselBox::voteTarPoint(pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud,
       bestPoint.ny      = cloud->points[bestIndex].normal_y;
       bestPoint.nz      = cloud->points[bestIndex].normal_z;
       bestPoint.curv    = cloud->points[bestIndex].curvature;
-      
-      // 输出调试信息
-      RCLCPP_INFO(rclcpp::get_logger("rclcpp"), "Selected point: (%.3f, %.3f, %.3f) with score %.2f", 
-                 bestPoint.ox, bestPoint.oy, bestPoint.oz, bestScore);
       return true;
     }
     else
     {
-      RCLCPP_DEBUG(rclcpp::get_logger("rclcpp"), "No valid target point found (num=%zu, thOver=%zu)", num, thOver);
       return false;
     }
   }

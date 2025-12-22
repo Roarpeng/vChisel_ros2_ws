@@ -561,106 +561,18 @@ private:
             RCLCPP_WARN(this->get_logger(), "Data may not be fresh, but proceeding with calculation");
         }
 
-        // 多帧数据累积处理
-        pcl::PointCloud<pcl::PointXYZRGB>::Ptr accumulated_cloud(new pcl::PointCloud<pcl::PointXYZRGB>);
-        pcl::PointCloud<pcl::PointXYZ>::Ptr accumulated_holes(new pcl::PointCloud<pcl::PointXYZ>);
+// 简化的单帧处理 - 保留图像尺寸匹配修复
+        RCLCPP_INFO(this->get_logger(), "Processing camera data...");
         
-        int frame_count = 0;
-        int valid_frames = 0;
-        rclcpp::Time last_frame_time = this->get_clock()->now();
+        // 执行孔洞检测和点云转换
+        holeDetector(imgColor_, imgDepth_, camInfo_, cloud_holes_);
+        imageToPointCloud(imgColor_, imgDepth_, camInfo_, cloud_);
         
-        RCLCPP_INFO(this->get_logger(), "Starting multi-frame accumulation (%d frames)...", MULTI_FRAME_NUM);
-        
-        while (frame_count < MULTI_FRAME_NUM && rclcpp::ok()) {
-            // 等待新帧数据
-            bool new_frame_received = false;
-            int wait_attempts = 0;
-            const int max_wait_attempts = 20; // 2秒超时
-            
-            img_ShotFlag = depth_ShotFlag = info_ShotFlag = true;
-            img_ready = depth_ready = info_ready = false;
-            
-            while (!new_frame_received && wait_attempts < max_wait_attempts && rclcpp::ok()) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(100));
-                if (img_ready && depth_ready && info_ready) {
-                    // 验证时间戳，确保是新数据
-                    rclcpp::Time current_img_time = last_img_time_;
-                    if (current_img_time > last_frame_time) {
-                        new_frame_received = true;
-                        last_frame_time = current_img_time;
-                    }
-                }
-                wait_attempts++;
-            }
-            
-            img_ShotFlag = depth_ShotFlag = info_ShotFlag = false;
-            
-            if (new_frame_received) {
-                // 处理当前帧
-                pcl::PointCloud<pcl::PointXYZ>::Ptr frame_holes(new pcl::PointCloud<pcl::PointXYZ>);
-                pcl::PointCloud<pcl::PointXYZRGB>::Ptr frame_cloud(new pcl::PointCloud<pcl::PointXYZRGB>);
-                
-                holeDetector(imgColor_, imgDepth_, camInfo_, frame_holes);
-                imageToPointCloud(imgColor_, imgDepth_, camInfo_, frame_cloud);
-                
-                // 累积数据
-                if (frame_cloud->points.size() > 100) { // 最低点数阈值
-                    *accumulated_cloud += *frame_cloud;
-                    if (frame_holes->points.size() > 0) {
-                        *accumulated_holes += *frame_holes;
-                    }
-                    valid_frames++;
-                    RCLCPP_INFO(this->get_logger(), "Frame %d accumulated: %zu points, %zu holes", 
-                               frame_count + 1, frame_cloud->points.size(), frame_holes->points.size());
-                } else {
-                    RCLCPP_WARN(this->get_logger(), "Frame %d skipped: insufficient points (%zu)", 
-                               frame_count + 1, frame_cloud->points.size());
-                }
-                
-                img_ready = depth_ready = info_ready = false;
-            } else {
-                RCLCPP_WARN(this->get_logger(), "Frame %d timeout, using available data", frame_count + 1);
-            }
-            
-            frame_count++;
-            
-            // 帧间间隔，确保获取不同时刻的数据
-            if (frame_count < MULTI_FRAME_NUM) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(200)); // 200ms间隔
-            }
-        }
-        
-        RCLCPP_INFO(this->get_logger(), "Multi-frame accumulation complete: %d/%d valid frames", 
-                   valid_frames, MULTI_FRAME_NUM);
-        
-        // 使用累积的数据
-        if (accumulated_cloud->points.size() > 500) { // 确保有足够的数据
-            *cloud_ = *accumulated_cloud;
-            *cloud_holes_ = *accumulated_holes;
-            
-            RCLCPP_INFO(this->get_logger(), "hole detect done, holes size=%zu", cloud_holes_->size());
-            RCLCPP_INFO(this->get_logger(), "image->pointcloud done, cloud size=%zu", cloud_->points.size());
-                    
-                    // 点云质量监控
-                    CloudQualityMetrics quality = evaluateCloudQuality(cloud_);
-                    RCLCPP_INFO(this->get_logger(), "Cloud Quality - Density: %.2f, DepthVar: %.4f, Coverage: %.2f, Overall: %.2f", 
-                               quality.point_density, quality.depth_variance, quality.coverage_ratio, quality.overall_score);
-                    
-                    // 根据质量评分调整处理策略
-                    if (quality.overall_score < 0.3f) {
-                        RCLCPP_WARN(this->get_logger(), "Low cloud quality detected (%.2f), results may be unreliable", quality.overall_score);
-                    }
-                    
-                    RCLCPP_INFO(this->get_logger(), "norm calc start!");            normCalc(cloud_holes_, cloud_, cloud_downSampled_, cloud_filtered_, cloud_smoothed_, cloud_normals_, cloud_with_normals_, cloud_shrink_, cloud_tarPoint_, triangles_, tarPointList_, inChiselParam, inGridParam);
-            RCLCPP_INFO(this->get_logger(), "norm calc done, tarPoint size maybe=%zu", cloud_tarPoint_->points.size());
-        } else {
-            RCLCPP_ERROR(this->get_logger(), "Insufficient accumulated data (%zu points), using single frame", accumulated_cloud->points.size());
-            
-            // 回退到单帧处理
-            holeDetector(imgColor_, imgDepth_, camInfo_, cloud_holes_);
-            imageToPointCloud(imgColor_, imgDepth_, camInfo_, cloud_);
-            normCalc(cloud_holes_, cloud_, cloud_downSampled_, cloud_filtered_, cloud_smoothed_, cloud_normals_, cloud_with_normals_, cloud_shrink_, cloud_tarPoint_, triangles_, tarPointList_, inChiselParam, inGridParam);
-        }
+        RCLCPP_INFO(this->get_logger(), "hole detect done, holes size=%zu", cloud_holes_->size());
+        RCLCPP_INFO(this->get_logger(), "image->pointcloud done, cloud size=%zu", cloud_->points.size());
+        RCLCPP_INFO(this->get_logger(), "norm calc start!");
+        normCalc(cloud_holes_, cloud_, cloud_downSampled_, cloud_filtered_, cloud_smoothed_, cloud_normals_, cloud_with_normals_, cloud_shrink_, cloud_tarPoint_, triangles_, tarPointList_, inChiselParam, inGridParam);
+        RCLCPP_INFO(this->get_logger(), "norm calc done, tarPoint size maybe=%zu", cloud_tarPoint_->points.size());
         
         
 
