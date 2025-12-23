@@ -393,15 +393,34 @@ bool normCalc(pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_holes,
       }
     }
   }
+  // 点云质量检查和密度提升
   for(indRow = 0;indRow < chiselParam.BOX_ROW; indRow++)  // 凿击区域法向点票选
   {
     for(indColumn = 0; indColumn < chiselParam.BOX_COLUMN; indColumn++)
     {
-      cout << indRow << "," << indColumn << ": " << chiselTable[indRow][indColumn]->getPointNum() << endl;
+      size_t pointNum = chiselTable[indRow][indColumn]->getPointNum();
+      cout << "Box[" << indRow << "," << indColumn << "]: " << pointNum << " points" << endl;
+      
+      // 使用新的质量检查功能
+      bool goodQuality = chiselTable[indRow][indColumn]->checkQuality();
+      bool needsEnhancement = chiselTable[indRow][indColumn]->needsEnhancement();
+      
+      if (!goodQuality) {
+        cout << "Box[" << indRow << "," << indColumn << "] POOR QUALITY (" << pointNum << " points)" << endl;
+      }
+      
+      if (needsEnhancement) {
+        cout << "Box[" << indRow << "," << indColumn << "] needs density enhancement (" << pointNum << " points)" << endl;
+        cout << "Box[" << indRow << "," << indColumn << "] enhancement requested (TODO: implement)" << endl;
+      }
+      
       chiselTable[indRow][indColumn]->voteTarPoint(cloud_shrink,cloud_holes,indRow,indColumn,tarPointList);
       if(chiselTable[indRow][indColumn]->getTarStatus())
       {
         chiselTable[indRow][indColumn]->getTarPoint(tarPointList[indRow*chiselParam.BOX_COLUMN + indColumn]);
+        cout << "Box[" << indRow << "," << indColumn << "] SUCCESS: found target point" << endl;
+      } else {
+        cout << "Box[" << indRow << "," << indColumn << "] FAILED: no valid target point" << endl;
       }
     }
   }

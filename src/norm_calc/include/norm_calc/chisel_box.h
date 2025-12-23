@@ -10,7 +10,7 @@
 // #define USING_SMOOTH          // 平滑开关
 // #define AVOID_RIM             // 避开边缘开关
 
-#define NORM_NUM_MAX  2000    // 每个凿击区块存储法向量上限
+#define NORM_NUM_MAX  20000   // 每个凿击区块存储法向量上限（适应多帧融合的高密度点云）
 // #define BOX_LEN       0.05f    // 每个正方形凿击区块边长
 // #define BOX_ROW       4       // 凿击区块行数
 // #define BOX_COLUMN    6       // 凿击区块列树
@@ -79,6 +79,8 @@ class ChiselBox
   bool getTarStatus();
   bool getTarPoint(ChiselNormPoint &tarPoint);
   size_t getPointNum();
+  bool checkQuality();  // 检查点云质量
+  bool needsEnhancement();  // 是否需要密度增强
 
   private:
   bool isTarExist;

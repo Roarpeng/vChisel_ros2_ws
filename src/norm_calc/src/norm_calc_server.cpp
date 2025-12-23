@@ -61,8 +61,8 @@ public:
         // initialize params into structs
         srand((unsigned)time(NULL));
         inChiselParam.BOX_LEN = this->get_parameter("BOX_LEN").as_double();
-        double randX = ((double)rand() / RAND_MAX - 0.5) * inChiselParam.BOX_LEN;
-        double randY = ((double)rand() / RAND_MAX - 0.5) * inChiselParam.BOX_LEN;
+        double randX = ((double)rand() / RAND_MAX - 0.5) * inChiselParam.BOX_LEN * 3.0;  // 增大3倍随机偏移
+        double randY = ((double)rand() / RAND_MAX - 0.5) * inChiselParam.BOX_LEN * 3.0;  // 增大3倍随机偏移
         inChiselParam.BOX_ROW = this->get_parameter("BOX_ROW").as_int();
         inChiselParam.BOX_COLUMN = this->get_parameter("BOX_COLUMN").as_int();
         inChiselParam.XMIN = this->get_parameter("XMIN").as_double() + randX;
@@ -129,6 +129,13 @@ public:
 
 private:
     // ======================= 成员定义 ==========================
+    // 区域5帧融合功能
+    bool enhanceRegionWithMultiFrame(
+        int targetRow, int targetColumn,
+        pcl::PointCloud<pcl::PointXYZRGB>::Ptr enhanced_cloud,
+        pcl::PointCloud<pcl::PointXYZ>::Ptr enhanced_holes,
+        chisel_box::ChiselParam chiselParam);
+
     rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr imgSub;
     rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr depthSub;
     rclcpp::Subscription<sensor_msgs::msg::CameraInfo>::SharedPtr camInfoSub;
@@ -602,9 +609,9 @@ private:
             RCLCPP_INFO(this->get_logger(), "Multi-frame accumulation complete: %zu points, %zu holes", 
                        cloud_->points.size(), cloud_holes_->size());
             RCLCPP_INFO(this->get_logger(), "norm calc start!");
-            normCalc(cloud_holes_, cloud_, cloud_downSampled_, cloud_filtered_, cloud_smoothed_, cloud_normals_, cloud_with_normals_, cloud_shrink_, cloud_tarPoint_, triangles_, tarPointList_, inChiselParam, inGridParam);
-            RCLCPP_INFO(this->get_logger(), "norm calc done, tarPoint size maybe=%zu", cloud_tarPoint_->points.size());
-        } else {
+                    
+                    normCalc(cloud_holes_, cloud_, cloud_downSampled_, cloud_filtered_, cloud_smoothed_, cloud_normals_, cloud_with_normals_, cloud_shrink_, cloud_tarPoint_, triangles_, tarPointList_, inChiselParam, inGridParam);
+                    RCLCPP_INFO(this->get_logger(), "norm calc done, tarPoint size maybe=%zu", cloud_tarPoint_->points.size());        } else {
             RCLCPP_ERROR(this->get_logger(), "Insufficient accumulated data (%zu points), falling back to single frame", accumulated_cloud->points.size());
             
             // 回退到单帧处理
@@ -786,6 +793,101 @@ private:
         memset(tarPointList_, 0, sizeof(tarPointList_));
     }
 };
+
+// 区域5帧融合实现
+bool NormCalcServer::enhanceRegionWithMultiFrame(
+    int targetRow, int targetColumn,
+    pcl::PointCloud<pcl::PointXYZRGB>::Ptr enhanced_cloud,
+    pcl::PointCloud<pcl::PointXYZ>::Ptr enhanced_holes,
+    chisel_box::ChiselParam chiselParam)
+{
+    RCLCPP_INFO(this->get_logger(), "Starting 5-frame enhancement for Box[%d,%d]", targetRow, targetColumn);
+    
+    pcl::PointCloud<pcl::PointXYZRGB>::Ptr accumulated_cloud(new pcl::PointCloud<pcl::PointXYZRGB>);
+    pcl::PointCloud<pcl::PointXYZ>::Ptr accumulated_holes(new pcl::PointCloud<pcl::PointXYZ>);
+    
+    // 计算目标区域的坐标范围
+    float boxSize = chiselParam.BOX_LEN;
+    float regionXMin = chiselParam.XMIN + targetColumn * boxSize;
+    float regionXMax = regionXMin + boxSize;
+    float regionYMin = chiselParam.YMIN + targetRow * boxSize;
+    float regionYMax = regionYMin + boxSize;
+    
+    RCLCPP_INFO(this->get_logger(), "Target region: X[%.3f,%.3f], Y[%.3f,%.3f]", 
+               regionXMin, regionXMax, regionYMin, regionYMax);
+    
+    // 采集5帧数据
+    for (int frame = 0; frame < 5; frame++) {
+        // 等待新帧数据
+        img_ShotFlag = depth_ShotFlag = info_ShotFlag = true;
+        img_ready = depth_ready = info_ready = false;
+        
+        int wait_count = 0;
+        while ((!img_ready || !depth_ready || !info_ready) && wait_count < 30 && rclcpp::ok()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            wait_count++;
+        }
+        
+        img_ShotFlag = depth_ShotFlag = info_ShotFlag = false;
+        
+        if (img_ready && depth_ready && info_ready) {
+            pcl::PointCloud<pcl::PointXYZ>::Ptr frame_holes(new pcl::PointCloud<pcl::PointXYZ>);
+            pcl::PointCloud<pcl::PointXYZRGB>::Ptr frame_cloud(new pcl::PointCloud<pcl::PointXYZRGB>);
+            
+            holeDetector(imgColor_, imgDepth_, camInfo_, frame_holes);
+            imageToPointCloud(imgColor_, imgDepth_, camInfo_, frame_cloud);
+            
+            // 过滤出目标区域的点云
+            pcl::PointCloud<pcl::PointXYZRGB>::Ptr region_cloud(new pcl::PointCloud<pcl::PointXYZRGB>);
+            for (const auto& point : frame_cloud->points) {
+                if (point.x >= regionXMin && point.x <= regionXMax &&
+                    point.y >= regionYMin && point.y <= regionYMax &&
+                    point.z >= chiselParam.ZMIN && point.z <= chiselParam.ZMAX) {
+                    region_cloud->points.push_back(point);
+                }
+            }
+            
+            // 同样过滤孔洞数据
+            pcl::PointCloud<pcl::PointXYZ>::Ptr region_holes(new pcl::PointCloud<pcl::PointXYZ>);
+            for (const auto& hole : frame_holes->points) {
+                if (hole.x >= regionXMin && hole.x <= regionXMax &&
+                    hole.y >= regionYMin && hole.y <= regionYMax &&
+                    hole.z >= chiselParam.ZMIN && hole.z <= chiselParam.ZMAX) {
+                    region_holes->points.push_back(hole);
+                }
+            }
+            
+            // 累积数据
+            if (region_cloud->points.size() > 100) {
+                *accumulated_cloud += *region_cloud;
+                if (region_holes->points.size() > 0) {
+                    *accumulated_holes += *region_holes;
+                }
+                RCLCPP_INFO(this->get_logger(), "Frame %d: %zu region points, %zu region holes", 
+                           frame + 1, region_cloud->points.size(), region_holes->points.size());
+            }
+            
+            img_ready = depth_ready = info_ready = false;
+            
+            if (frame < 4) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(200));
+            }
+        }
+    }
+    
+    // 检查增强效果
+    if (accumulated_cloud->points.size() > 1000) {
+        *enhanced_cloud = *accumulated_cloud;
+        *enhanced_holes = *accumulated_holes;
+        RCLCPP_INFO(this->get_logger(), "Region enhancement successful: %zu points, %zu holes", 
+                   enhanced_cloud->points.size(), enhanced_holes->points.size());
+        return true;
+    } else {
+        RCLCPP_WARN(this->get_logger(), "Region enhancement failed: insufficient points (%zu)", 
+                    accumulated_cloud->points.size());
+        return false;
+    }
+}
 
 int main(int argc, char **argv)
 {
