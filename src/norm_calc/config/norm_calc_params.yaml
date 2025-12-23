@@ -11,9 +11,9 @@ norm_calc:
     ZMIN: 0.2
     ZMAX: 0.6
     BORDER_WIDTH: 0.03
-    NORM_TH: 0.95
+    NORM_TH: 0.90
     AFFECT_RADIUS: 0.0009
-    HEIGHT_WEIGHT: 3.0
+    HEIGHT_WEIGHT: 2.0
     CURV_WEIGHT: 2.0
     ANGLE_WEIGHT: 1.0
     SEARCH_RADIUS: 0.03
@@ -23,4 +23,4 @@ norm_calc:
     TH_DEEPNORM: 0.8
     TH_HALF: 50
     TH_FULL: 100
-    TH_ANGLE: 0.99
+    TH_ANGLE: 0.95
