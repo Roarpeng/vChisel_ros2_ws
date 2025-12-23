@@ -412,12 +412,23 @@ private:
             {
                 for (int col = 0; col < cols; col++)
                 {
+                    // 检查深度图像边界
+                    if (row >= depthImg.rows || col >= depthImg.cols) {
+                        continue;
+                    }
+                    
                     p.z = 0.001f * depthImg.at<uint16_t>(row, col);
+                    
+                    // 检查相机内参有效性
+                    if (camInfo.k[0] == 0 || camInfo.k[4] == 0) {
+                        continue;
+                    }
+                    
                     p.x = (col - camInfo.k[2]) / camInfo.k[0] * p.z;
                     p.y = (row - camInfo.k[5]) / camInfo.k[4] * p.z;
                     
-                    // 确保颜色图像有足够的通道数
-                    if (colorImg.channels() >= 3) {
+                    // 确保颜色图像有足够的通道数且边界检查
+                    if (colorImg.channels() >= 3 && row < colorImg.rows && col < colorImg.cols) {
                         p.r = colorImg.at<cv::Vec3b>(row, col)[0];  // BGR format
                         p.g = colorImg.at<cv::Vec3b>(row, col)[1];
                         p.b = colorImg.at<cv::Vec3b>(row, col)[2];
@@ -432,7 +443,10 @@ private:
                         p.a = 128; // 默认值
                     }
                     
-                    cloud->points.push_back(p);
+                    // 只添加有效点
+                    if (p.z > 0 && !std::isnan(p.x) && !std::isnan(p.y) && !std::isnan(p.z)) {
+                        cloud->points.push_back(p);
+                    }
                 }
             }
         } else {
@@ -451,12 +465,23 @@ private:
             {
                 for (int col = 0; col < depthImg.cols; col++)
                 {
+                    // 检查深度图像边界
+                    if (row >= depthImg.rows || col >= depthImg.cols) {
+                        continue;
+                    }
+                    
                     p.z = 0.001f * depthImg.at<uint16_t>(row, col);
+                    
+                    // 检查相机内参有效性
+                    if (camInfo.k[0] == 0 || camInfo.k[4] == 0) {
+                        continue;
+                    }
+                    
                     p.x = (col - camInfo.k[2]) / camInfo.k[0] * p.z;
                     p.y = (row - camInfo.k[5]) / camInfo.k[4] * p.z;
                     
-                    // 使用更安全的颜色访问方式
-                    if (colorImg.channels() >= 3) {
+                    // 使用更安全的颜色访问方式，并添加边界检查
+                    if (colorImg.channels() >= 3 && row < colorImg.rows && col < colorImg.cols) {
                         p.r = colorImg.at<cv::Vec3b>(row, col)[2];  // BGR format, R is the 3rd channel
                         p.g = colorImg.at<cv::Vec3b>(row, col)[1];  // G is the 2nd channel
                         p.b = colorImg.at<cv::Vec3b>(row, col)[0];  // B is the 1st channel
@@ -464,8 +489,17 @@ private:
                         p.r = p.g = p.b = 128; // 默认灰色
                     }
                     
-                    p.a = blurImg.at<uint8_t>(row, col);
-                    cloud->points.push_back(p);
+                    // 确保blurImg尺寸匹配
+                    if (row < blurImg.rows && col < blurImg.cols) {
+                        p.a = blurImg.at<uint8_t>(row, col);
+                    } else {
+                        p.a = 128; // 默认值
+                    }
+                    
+                    // 只添加有效点
+                    if (p.z > 0 && !std::isnan(p.x) && !std::isnan(p.y) && !std::isnan(p.z)) {
+                        cloud->points.push_back(p);
+                    }
                 }
             }
         }
@@ -511,6 +545,15 @@ private:
         // 验证获取的数据是否有效，但降低严格性以适应降低帧率的情况
         if (imgColor_.empty() || imgDepth_.empty()) {
             RCLCPP_ERROR(this->get_logger(), "Invalid camera data received - image or depth is empty");
+            res->pose_list.header.frame_id = "error";
+            res->pose_list.header.stamp = this->get_clock()->now();
+            return;
+        }
+        
+        // 检查图像尺寸是否有效
+        if (imgColor_.rows <= 0 || imgColor_.cols <= 0 || imgDepth_.rows <= 0 || imgDepth_.cols <= 0) {
+            RCLCPP_ERROR(this->get_logger(), "Invalid image dimensions: color(%dx%d), depth(%dx%d)", 
+                        imgColor_.cols, imgColor_.rows, imgDepth_.cols, imgDepth_.rows);
             res->pose_list.header.frame_id = "error";
             res->pose_list.header.stamp = this->get_clock()->now();
             return;
@@ -671,6 +714,12 @@ private:
 
         for (int i = 0; i < maxTarNum; ++i)
         {
+            // 确保数组访问在边界内（24个元素，索引0-23）
+            if (i >= 24) {
+                RCLCPP_ERROR(this->get_logger(), "Array index out of bounds: %d >= 24", i);
+                break;
+            }
+            
             if (tarPointList_[i].status)
             {
                 if (Coordinate_TF(tarPointList_[i], TF_Matrix))
@@ -691,6 +740,12 @@ private:
         // fill response
         for (int i = 0; i < maxTarNum; ++i)
         {
+            // 确保数组访问在边界内（24个元素，索引0-23）
+            if (i >= 24) {
+                RCLCPP_ERROR(this->get_logger(), "Array index out of bounds in response: %d >= 24", i);
+                break;
+            }
+            
             if (tarPointList_[i].status)
             {
                 geometry_msgs::msg::Pose pose;
