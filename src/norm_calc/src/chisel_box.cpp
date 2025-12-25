@@ -1,5 +1,5 @@
 #include "norm_calc/chisel_box.h"
-#include "rclcpp/rclcpp.hpp"
+#include <ros/ros.h>
 namespace chisel_box
 {
 ChiselBox::ChiselBox(
@@ -86,12 +86,12 @@ bool ChiselBox::voteTarPoint(pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud,
         thOver++;
         continue;
       }
-      // 深度太深直接放弃
-      if (cloud->points[indexList[i]].z > 0.56f)
+
+      // 太深直接放弃
+      if (cloud->points[indexList[i]].z > 0.55f)
       {
         continue;
       }
-
 
       if(indexRow > 0) // 非第一排
       {
@@ -194,17 +194,13 @@ bool ChiselBox::voteTarPoint(pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud,
 
       // 角度影响
       angleScore = inAngleWeight * fabs(cloud->points[indexList[i]].normal_z);
-      // 改进的评分计算：确保平面区域也能得到合理分数
-      float randomFactor = ((float)rand() / RAND_MAX) * 15.0f; // 增加随机因子到0-15
-      float baseScore = 50.0f; // 基础分数，确保即使扣分后仍有正分
-      
-      score = baseScore
-            - heightScore * 0.5f      // 降低高度权重影响
-            - curvScore * 0.5f        // 降低曲率权重影响  
-            + angleScore * 1.5f       // 增加角度权重
+      // 得分计算
+      score = 100.0f 
+            - heightScore
+            - curvScore
+            + angleScore 
             - 0.1f*holeScore
-            + grayScore
-            + randomFactor; // 增强随机扰动
+            + grayScore;
       // score = 100.0f 
       //       - heightScore
       //       - curvScore
@@ -227,11 +223,9 @@ bool ChiselBox::voteTarPoint(pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud,
       }
     }
 
-    RCLCPP_INFO(rclcpp::get_logger("rclcpp"), "THOVER = %d", thOver);
-
+    ROS_INFO("THOVER = %d",thOver);
     
-    // 修改条件：确保每个格子都能返回结果，即使分数为负
-    if (bestIndex > 0 && num > thOver) // 只要有有效点和足够的数量就返回结果
+    if (bestScore > 0.0f)
     {
       isTarExist        = true;
       bestPoint.status  = true;
@@ -242,15 +236,10 @@ bool ChiselBox::voteTarPoint(pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud,
       bestPoint.ny      = cloud->points[bestIndex].normal_y;
       bestPoint.nz      = cloud->points[bestIndex].normal_z;
       bestPoint.curv    = cloud->points[bestIndex].curvature;
-      
-      RCLCPP_INFO(rclcpp::get_logger("rclcpp"), "Box[%zu,%zu] selected point: (%.3f,%.3f,%.3f) score: %.2f", 
-                 indexRow, indexColumn, bestPoint.ox, bestPoint.oy, bestPoint.oz, bestScore);
       return true;
     }
     else
     {
-      RCLCPP_WARN(rclcpp::get_logger("rclcpp"), "Box[%zu,%zu] no valid point (num=%zu, thOver=%zu)", 
-                  indexRow, indexColumn, num, thOver);
       return false;
     }
   }
@@ -292,26 +281,6 @@ bool ChiselBox::getTarPoint(ChiselNormPoint &tarPoint)
 size_t ChiselBox::getPointNum()
 {
   return num;
-}
-
-// 检查点云质量
-bool ChiselBox::checkQuality()
-{
-  // 基本质量检查：点数是否足够
-  if (num < 100) return false;  // 最少需要100点
-  
-  // 可以添加更多质量检查：
-  // - 点分布均匀性
-  // - 法向量一致性
-  // - 深度变化合理性
-  
-  return true;
-}
-
-// 是否需要密度增强
-bool ChiselBox::needsEnhancement()
-{
-  return (num < 500);  // 少于500点需要增强
 }
 
 }

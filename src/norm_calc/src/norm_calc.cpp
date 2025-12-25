@@ -43,7 +43,7 @@ bool normCalc(pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_holes,
   // ********下采样start********
   pcl::VoxelGrid<pcl::PointXYZRGB> downSampled;     //创建滤波对象
   downSampled.setInputCloud (cloud_filtered);       //设置需要过滤的点云给滤波对象
-  downSampled.setLeafSize (0.001f, 0.001f, 0.001f); //设置滤波时创建的体素体积为1mm的立方体，保留更多细节
+  downSampled.setLeafSize (0.0025f, 0.0025f, 0.0025f); //设置滤波时创建的体素体积为5mm的立方体
   downSampled.filter (*cloud_downSampled);          //执行滤波处理，存储输出
   cout << "downSampled cloud: " << cloud_downSampled->points.size () << endl;
   // ********下采样end********
@@ -343,6 +343,7 @@ bool normCalc(pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_holes,
                             chiselParam.NORM_TH);
     }
   }
+
   float fRow, fCol;
   int indRow,indColumn;
   for (size_t i = 0; i < cloud_shrink->points.size(); i++) // 将符合条件的法向点归纳至4*6凿击区域类
@@ -393,34 +394,15 @@ bool normCalc(pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_holes,
       }
     }
   }
-  // 点云质量检查和密度提升
   for(indRow = 0;indRow < chiselParam.BOX_ROW; indRow++)  // 凿击区域法向点票选
   {
     for(indColumn = 0; indColumn < chiselParam.BOX_COLUMN; indColumn++)
     {
-      size_t pointNum = chiselTable[indRow][indColumn]->getPointNum();
-      cout << "Box[" << indRow << "," << indColumn << "]: " << pointNum << " points" << endl;
-      
-      // 使用新的质量检查功能
-      bool goodQuality = chiselTable[indRow][indColumn]->checkQuality();
-      bool needsEnhancement = chiselTable[indRow][indColumn]->needsEnhancement();
-      
-      if (!goodQuality) {
-        cout << "Box[" << indRow << "," << indColumn << "] POOR QUALITY (" << pointNum << " points)" << endl;
-      }
-      
-      if (needsEnhancement) {
-        cout << "Box[" << indRow << "," << indColumn << "] needs density enhancement (" << pointNum << " points)" << endl;
-        cout << "Box[" << indRow << "," << indColumn << "] enhancement requested (TODO: implement)" << endl;
-      }
-      
+      cout << indRow << "," << indColumn << ": " << chiselTable[indRow][indColumn]->getPointNum() << endl;
       chiselTable[indRow][indColumn]->voteTarPoint(cloud_shrink,cloud_holes,indRow,indColumn,tarPointList);
       if(chiselTable[indRow][indColumn]->getTarStatus())
       {
         chiselTable[indRow][indColumn]->getTarPoint(tarPointList[indRow*chiselParam.BOX_COLUMN + indColumn]);
-        cout << "Box[" << indRow << "," << indColumn << "] SUCCESS: found target point" << endl;
-      } else {
-        cout << "Box[" << indRow << "," << indColumn << "] FAILED: no valid target point" << endl;
       }
     }
   }

@@ -3,7 +3,7 @@
 using namespace std;
 using namespace cv;
 
-bool holeDetector(cv::Mat src, cv::Mat depthInfo, sensor_msgs::msg::CameraInfo camInfo, pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_holes)
+bool holeDetector(cv::Mat src, cv::Mat depthInfo, sensor_msgs::CameraInfo camInfo, pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_holes)
 {
     cv::Mat src_in, src_binary,src_morp, src_gray,src_distance;
     
@@ -72,14 +72,14 @@ bool holeDetector(cv::Mat src, cv::Mat depthInfo, sensor_msgs::msg::CameraInfo c
         for (int i = 0; i < centerLists.size(); i++)
         {
             cloud_holes->points[i].z = 0.001f * depthInfo.at<u_int16_t>(centerLists[i].y, centerLists[i].x);
-            cloud_holes->points[i].x = (centerLists[i].x - camInfo.k.at(2))/camInfo.k.at(0) * cloud_holes->points[i].z;
-            cloud_holes->points[i].y = (centerLists[i].y - camInfo.k.at(5))/camInfo.k.at(4) * cloud_holes->points[i].z;
+            cloud_holes->points[i].x = (centerLists[i].x - camInfo.K.at(2))/camInfo.K.at(0) * cloud_holes->points[i].z;
+            cloud_holes->points[i].y = (centerLists[i].y - camInfo.K.at(5))/camInfo.K.at(4) * cloud_holes->points[i].z;
             cloud_holes->points[i].z -= 0.01f; // 为了显示不遮挡
             // cout << centerLists[i].x << ", "<<centerLists[i].y << endl;
             // cout << cloud_holes->points[i].x << ", "<<cloud_holes->points[i].y << ", "<<cloud_holes->points[i].z << endl;
         }
     }
-    // 
+    
     // waitKey(0);
     return true;
 }

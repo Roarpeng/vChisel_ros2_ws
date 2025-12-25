@@ -1,141 +1,116 @@
-#include "rclcpp/rclcpp.hpp"
-#include "sensor_msgs/msg/point_cloud2.hpp"
+#include "norm_calc/norm_calc.h"
+#include <sensor_msgs/PointCloud2.h>
+#include <pcl_msgs/PolygonMesh.h>
 #include <pcl_conversions/pcl_conversions.h>
-#include <pcl/PolygonMesh.h>
-#include <pcl/point_types.h>
-#include <pcl/point_cloud.h>
-#include <pcl/visualization/pcl_visualizer.h>
+#include <pcl_ros/transforms.h>
 #include <message_filters/subscriber.h>
 #include <message_filters/time_synchronizer.h>
-#include <message_filters/sync_policies/approximate_time.h>
+pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud_smoothed (new pcl::PointCloud<pcl::PointXYZRGB>);
+pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud_tarPoint (new pcl::PointCloud<pcl::PointXYZRGBNormal>);
+pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud_allNorm (new pcl::PointCloud<pcl::PointXYZRGBNormal>);
+pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_holes (new pcl::PointCloud<pcl::PointXYZ>);
+pcl::PolygonMesh::Ptr triangles (new pcl::PolygonMesh);
 
-using std::placeholders::_1;
-using std::placeholders::_2;
-using std::placeholders::_3;
-using std::placeholders::_4;
-using std::placeholders::_5;
+pcl::visualization::PCLVisualizer viewer("PCL Viewer");
 
-class NormViewerNode : public rclcpp::Node
+bool dataRefresh = false;
+
+void cloudCallBack( const sensor_msgs::PointCloud2ConstPtr& inputSmoothedData,
+                    const sensor_msgs::PointCloud2ConstPtr& inputTarPointData,
+                    const sensor_msgs::PointCloud2ConstPtr& inputAllNormData,
+                    const sensor_msgs::PointCloud2ConstPtr& inputHolesData,
+                    const pcl_msgs::PolygonMeshConstPtr& inputTrianglesData
+)  
 {
-public:
-    NormViewerNode() : Node("norm_viewer"), data_refresh_(false)
-    {
-        using namespace message_filters;
+    pcl::fromROSMsg(*inputSmoothedData, *cloud_smoothed);
+    pcl::fromROSMsg(*inputTarPointData, *cloud_tarPoint);
+    pcl::fromROSMsg(*inputAllNormData,  *cloud_allNorm);
+    pcl::fromROSMsg(*inputHolesData,    *cloud_holes);
+    pcl_conversions::toPCL(*inputTrianglesData,*triangles);
+    dataRefresh = true;
+    ROS_INFO("data refressh!!!");
+}
 
-        sub_smoothed_.subscribe(this, "smoothedData");
-        sub_tarpoint_.subscribe(this, "tarPointData");
-        sub_allnorm_.subscribe(this, "allNormData");
-        sub_holes_.subscribe(this, "holesData");
-        sub_triangles_.subscribe(this, "trianglesData");
-
-        sync_ = std::make_shared<
-            Synchronizer<MySyncPolicy>>(MySyncPolicy(10),
-                                        sub_smoothed_,
-                                        sub_tarpoint_,
-                                        sub_allnorm_,
-                                        sub_holes_,
-                                        sub_triangles_);
-
-        sync_->registerCallback(std::bind(&NormViewerNode::cloudCallback, this, _1, _2, _3, _4, _5));
-
-        viewer_ = std::make_shared<pcl::visualization::PCLVisualizer>("PCL Viewer");
-        viewer_->setPosition(1000, 500);
-        viewer_->setBackgroundColor(0.0, 0.0, 0.3);
-        RCLCPP_INFO(this->get_logger(), "norm_viewer node initialized.");
-    }
-
-    void spinViewer()
-    {
-        rclcpp::Rate rate(10);
-        while (rclcpp::ok() && !viewer_->wasStopped())
-        {
-            rclcpp::spin_some(shared_from_this());
-            updateViewer();
-            rate.sleep();
-        }
-    }
-
-private:
-    // 同步回调函数
-    void cloudCallback(const sensor_msgs::msg::PointCloud2::ConstSharedPtr &inputSmoothedData,
-                       const sensor_msgs::msg::PointCloud2::ConstSharedPtr &inputTarPointData,
-                       const sensor_msgs::msg::PointCloud2::ConstSharedPtr &inputAllNormData,
-                       const sensor_msgs::msg::PointCloud2::ConstSharedPtr &inputHolesData,
-                       const pcl_msgs::msg::PolygonMesh::ConstSharedPtr &inputTrianglesData)
-    {
-        pcl::fromROSMsg(*inputSmoothedData, *cloud_smoothed_);
-        pcl::fromROSMsg(*inputTarPointData, *cloud_tarpoint_);
-        pcl::fromROSMsg(*inputAllNormData, *cloud_allnorm_);
-        pcl::fromROSMsg(*inputHolesData, *cloud_holes_);
-        pcl_conversions::toPCL(*inputTrianglesData, *triangles_);
-        data_refresh_ = true;
-        RCLCPP_INFO(this->get_logger(), "Data refreshed!");
-    }
-
-    void updateViewer()
-    {
-        if (data_refresh_)
-        {
-            viewer_->removeAllShapes();
-            viewer_->removeAllPointClouds();
-
-            pcl::visualization::PointCloudColorHandlerRGBField<pcl::PointXYZRGB> rgb(cloud_smoothed_);
-            viewer_->addPointCloud<pcl::PointXYZRGB>(cloud_smoothed_, rgb, "cloud_smoothed");
-            viewer_->setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 3, "cloud_smoothed");
-
-            viewer_->addPointCloudNormals<pcl::PointXYZRGBNormal>(cloud_tarpoint_, 1, 0.1, "cloud_tarPoint");
-            viewer_->setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_LINE_WIDTH, 5, "cloud_tarPoint");
-            viewer_->setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_COLOR, 1, 0, 0, "cloud_tarPoint");
-
-            viewer_->addPointCloud<pcl::PointXYZ>(cloud_holes_, "cloud_holes");
-            viewer_->setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 10, "cloud_holes");
-            viewer_->setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_COLOR, 0, 1, 0, "cloud_holes");
-
-            // 加一些示意线
-            std::string id;
-            for (int i = 0; i <= 11; i++)
-            {
-                id = std::to_string(i);
-                viewer_->addLine<pcl::PointXYZ>(pcl::PointXYZ(-0.165 + 0.05 * i, -0.115, 0.46),
-                                                pcl::PointXYZ(-0.165 + 0.05 * i, 0.115, 0.46), 255, 0, 0, id);
-            }
-
-            viewer_->addCoordinateSystem(0.2);
-            viewer_->setCameraPosition(0, 0, -1, 0, 0, 1, 0, -1, 0);
-            viewer_->setRepresentationToSurfaceForAllActors();
-            data_refresh_ = false;
-        }
-        viewer_->spinOnce();
-    }
-
-    // 成员对象
-    typedef message_filters::sync_policies::ApproximateTime<
-        sensor_msgs::msg::PointCloud2,
-        sensor_msgs::msg::PointCloud2,
-        sensor_msgs::msg::PointCloud2,
-        sensor_msgs::msg::PointCloud2,
-        pcl_msgs::msg::PolygonMesh>
-        MySyncPolicy;
-
-    message_filters::Subscriber<sensor_msgs::msg::PointCloud2> sub_smoothed_, sub_tarpoint_, sub_allnorm_, sub_holes_;
-    message_filters::Subscriber<pcl_msgs::msg::PolygonMesh> sub_triangles_;
-    std::shared_ptr<message_filters::Synchronizer<MySyncPolicy>> sync_;
-
-    pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud_smoothed_{new pcl::PointCloud<pcl::PointXYZRGB>};
-    pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud_tarpoint_{new pcl::PointCloud<pcl::PointXYZRGBNormal>};
-    pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud_allnorm_{new pcl::PointCloud<pcl::PointXYZRGBNormal>};
-    pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_holes_{new pcl::PointCloud<pcl::PointXYZ>};
-    pcl::PolygonMesh::Ptr triangles_{new pcl::PolygonMesh};
-
-    std::shared_ptr<pcl::visualization::PCLVisualizer> viewer_;
-    bool data_refresh_;
-};
-
-int main(int argc, char **argv)
+void cloudViewer()
 {
-    rclcpp::init(argc, argv);
-    auto node = std::make_shared<NormViewerNode>();
-    node->spinViewer();
-    rclcpp::shutdown();
+    if (dataRefresh)
+    {
+        viewer.removeAllShapes();
+        viewer.removeAllPointClouds();
+        viewer.setBackgroundColor (0.0, 0.0, 0.3);
+
+        pcl::visualization::PointCloudColorHandlerRGBField<pcl::PointXYZRGB> rgb(cloud_smoothed);
+        viewer.addPointCloud<pcl::PointXYZRGB>(cloud_smoothed,rgb,"cloud_smoothed");
+        viewer.setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_POINT_SIZE,3,"cloud_smoothed");
+
+        viewer.addPointCloudNormals<pcl::PointXYZRGBNormal>(cloud_tarPoint,1,0.1,"cloud_tarPoint");
+        viewer.setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_LINE_WIDTH,5,"cloud_tarPoint");
+        viewer.setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_COLOR,1,0,0,"cloud_tarPoint");
+
+        // viewer.addPointCloudNormals<pcl::PointXYZRGBNormal>(cloud_allNorm,1,0.1,"cloud_allNorm");
+        // viewer.setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_LINE_WIDTH,1,"cloud_allNorm");
+        // viewer.setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_COLOR,0,1,0,"cloud_allNorm");
+
+        viewer.addPointCloud<pcl::PointXYZ>(cloud_holes,"cloud_holes");
+        viewer.setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_POINT_SIZE,10,"cloud_holes");
+        viewer.setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_COLOR,0,1,0,"cloud_holes");
+
+        // viewer.addPolygonMesh(*triangles,"triangles");
+
+
+        std::string id = std::to_string(0);
+        viewer.addLine<pcl::PointXYZ>(pcl::PointXYZ(-0.165, -0.115, 0.46),pcl::PointXYZ(0.165, -0.115, 0.46),255,0,0,id);
+        for (int i = 1; i < 4; i++)
+        {
+            id = std::to_string(i);
+            viewer.addLine<pcl::PointXYZ>(pcl::PointXYZ(-0.165, 0.05*i - 0.1, 0.46),pcl::PointXYZ(0.165, 0.05*i - 0.1, 0.46),255,0,0,id);
+        }
+        id = std::to_string(4);
+        viewer.addLine<pcl::PointXYZ>(pcl::PointXYZ(-0.165, 0.115, 0.46),pcl::PointXYZ(0.165, 0.115, 0.46),255,0,0,id);
+
+        id = std::to_string(5);
+        viewer.addLine<pcl::PointXYZ>(pcl::PointXYZ(-0.165, -0.115, 0.46),pcl::PointXYZ(-0.165, 0.115, 0.46),255,0,0,id);
+        for (int j = 1; j < 6; j++)
+        {
+            id = std::to_string(5+j);
+            viewer.addLine<pcl::PointXYZ>(pcl::PointXYZ(0.05*j-0.15, -0.125, 0.46),pcl::PointXYZ(0.05*j-0.15, 0.115, 0.46),255,0,0,id);
+        }
+        id = std::to_string(11);
+        viewer.addLine<pcl::PointXYZ>(pcl::PointXYZ(0.165, -0.115, 0.46),pcl::PointXYZ(0.165, 0.115, 0.46),255,0,0,id);
+        
+
+        viewer.addCoordinateSystem (0.2);
+        viewer.setCameraPosition(0,0,-1,0,0,1,0,-1,0);
+        viewer.setRepresentationToSurfaceForAllActors(); //网格模型以面片形式显示
+
+        dataRefresh = false;
+    }
+    viewer.spinOnce ();
+}
+
+int main(int argc, char** argv)
+{ 
+    ros::init(argc, argv, "norm_viewer");
+
+    ros::NodeHandle nh;
+
+    message_filters::Subscriber<sensor_msgs::PointCloud2> subSmoothedData(nh,"smoothedData",1);
+    message_filters::Subscriber<sensor_msgs::PointCloud2> subTarPointData(nh,"tarPointData",1);
+    message_filters::Subscriber<sensor_msgs::PointCloud2> subAllNormtData(nh,"allNormData",1);
+    message_filters::Subscriber<sensor_msgs::PointCloud2> subHolesData(nh,"holesData",1);
+    message_filters::Subscriber<pcl_msgs::PolygonMesh> subTrianglesData(nh,"trianglesData",1);
+    message_filters::TimeSynchronizer<sensor_msgs::PointCloud2,sensor_msgs::PointCloud2,sensor_msgs::PointCloud2,sensor_msgs::PointCloud2,pcl_msgs::PolygonMesh> sync(subSmoothedData,subTarPointData,subAllNormtData,subHolesData, subTrianglesData,10);
+    sync.registerCallback(boost::bind(&cloudCallBack,_1,_2,_3,_4,_5));
+    // ros::Subscriber subSmoothedData = nh.subscribe("smoothedData","tarPointData","trianglesData",5,cloudCallBack);
+    // ros::Subscriber subTarPointData = nh.subscribe("tarPointData",1,cloudCallBack);
+    // ros::Subscriber subTrianglesData = nh.subscribe("trianglesData",1,cloudCallBack);
+    viewer.setPosition(1000,500);
+    ros::Rate loop_rate(10);
+    while(ros::ok && !viewer.wasStopped())
+    {
+        ros::spinOnce();
+        cloudViewer();
+        loop_rate.sleep();
+    }
     return 0;
 }
