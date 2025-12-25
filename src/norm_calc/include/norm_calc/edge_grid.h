@@ -59,9 +59,14 @@ class EdgeGrid
     EdgeGrid(const EdgeGrid &obj);
     ~EdgeGrid();
     bool reset(void);
+    void setMinDistanceThreshold(float threshold);  // Set the minimum distance threshold
     bool addPointInd(size_t index);
     bool calcGridPos(pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud);
     bool getGridPos(GridNormPoint &retPoint);
+
+    private:
+    float calculateDistance(const GridNormPoint& p1, const GridNormPoint& p2);  // Calculate distance between two points
+    GridNormPoint applyRandomOffset(const GridNormPoint& point);  // Apply random offset to a point
 
     private:
     size_t normNum;
@@ -74,6 +79,10 @@ class EdgeGrid
     float thAngle;
     size_t indexList[MAX_NORM_EACH_GRID];
     GridNormPoint gridNorm;
+    // Variables for tracking last valid point and distance threshold
+    GridNormPoint lastValidPoint;
+    float minDistanceThreshold;  // Distance threshold (default 0.03m)
+    bool hasLastValidPoint;      // Flag to indicate if we have a previous point
 };
 }
 

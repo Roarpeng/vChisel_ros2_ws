@@ -3,7 +3,6 @@
 #include "geometry_msgs/msg/pose_array.hpp"
 #include "norm_calc/srv/norm_calc_data.hpp"
 #include <pcl_conversions/pcl_conversions.h>
-// #include <pcl_ros/transforms.h>  // This header may not exist in ROS2 or has been replaced
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
 #include "norm_calc/norm_calc.h"
@@ -32,12 +31,12 @@ void processNormCalc(const std::shared_ptr<norm_calc::srv::NormCalcData::Request
 {
     // Print the received sequence number
     RCLCPP_INFO(rclcpp::get_logger("norm_calc_server"), "Received request with sequence: %d", request->seq);
-    
+
     // Create some dummy point clouds for demonstration
     // In a real implementation, you would get these from a sensor or other source
     pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud (new pcl::PointCloud<pcl::PointXYZRGB>);
     pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_holes (new pcl::PointCloud<pcl::PointXYZ>);
-    
+
     // Fill with some dummy data (in a real case, this would come from a sensor)
     cloud->width = 100;
     cloud->height = 1;
@@ -50,7 +49,7 @@ void processNormCalc(const std::shared_ptr<norm_calc::srv::NormCalcData::Request
         cloud->points[i].g = 255;
         cloud->points[i].b = 255;
     }
-    
+
     cloud_holes->width = 10;
     cloud_holes->height = 1;
     cloud_holes->points.resize(cloud_holes->width * cloud_holes->height);
@@ -59,7 +58,7 @@ void processNormCalc(const std::shared_ptr<norm_calc::srv::NormCalcData::Request
         cloud_holes->points[i].y = 1024 * rand() / (RAND_MAX + 1.0f);
         cloud_holes->points[i].z = 1024 * rand() / (RAND_MAX + 1.0f);
     }
-    
+
     // Create intermediate point clouds
     pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud_downSampled (new pcl::PointCloud<pcl::PointXYZRGB>);
     pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud_filtered (new pcl::PointCloud<pcl::PointXYZRGB>);
@@ -69,7 +68,7 @@ void processNormCalc(const std::shared_ptr<norm_calc::srv::NormCalcData::Request
     pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud_shrink (new pcl::PointCloud<pcl::PointXYZRGBNormal>);
     pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud_tarPoint (new pcl::PointCloud<pcl::PointXYZRGBNormal>);
     pcl::PolygonMesh::Ptr triangles (new pcl::PolygonMesh);
-    
+
     // Initialize parameters (these should come from parameters or config files in a real implementation)
     chisel_box::ChiselParam chiselParam;
     chiselParam.BOX_LEN = 0.05;
@@ -93,7 +92,7 @@ void processNormCalc(const std::shared_ptr<norm_calc::srv::NormCalcData::Request
     chiselParam.ANGLE_WEIGHT = 1.0;
     chiselParam.SEARCH_RADIUS = 0.03;
     chiselParam.SEARCH_NUM_TH = 20;
-    
+
     edge_grid::GridParam gridParam;
     gridParam.THDEEP = 0.57;
     gridParam.THDEEPNORM = 0.96;
@@ -106,10 +105,10 @@ void processNormCalc(const std::shared_ptr<norm_calc::srv::NormCalcData::Request
     gridParam.GRID_COLUMN = 10; // This needs to be defined based on your grid setup
     gridParam.YMIN = chiselParam.YMIN;
     gridParam.XMIN = chiselParam.XMIN;
-    
+
     // Create target point list
     chisel_box::ChiselNormPoint tarPointList[24]; // 4*6 = 24
-    
+
     // Call the normCalc function
     bool success = normCalc(
         cloud_holes,
@@ -126,15 +125,15 @@ void processNormCalc(const std::shared_ptr<norm_calc::srv::NormCalcData::Request
         chiselParam,
         gridParam
     );
-    
+
     if (success) {
         RCLCPP_INFO(rclcpp::get_logger("norm_calc_server"), "Norm calculation completed successfully.");
-        
+
         // Create response with the calculated poses
         geometry_msgs::msg::PoseArray pose_array;
         pose_array.header.frame_id = "base_link";
         pose_array.header.stamp = rclcpp::Clock().now();
-        
+
         // Add poses from tarPointList to the response
         for (int i = 0; i < 24; i++) {
             if (tarPointList[i].status) {
@@ -146,11 +145,11 @@ void processNormCalc(const std::shared_ptr<norm_calc::srv::NormCalcData::Request
                 pose.orientation.y = tarPointList[i].ny;
                 pose.orientation.z = tarPointList[i].nz;
                 pose.orientation.w = tarPointList[i].curv; // Using curvature as w component for demo
-                
+
                 pose_array.poses.push_back(pose);
             }
         }
-        
+
         response->pose_list = pose_array;
         RCLCPP_INFO(rclcpp::get_logger("norm_calc_server"), "Sending response with %zu poses.", pose_array.poses.size());
     } else {
