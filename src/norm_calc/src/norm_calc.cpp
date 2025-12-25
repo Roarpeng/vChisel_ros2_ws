@@ -1,6 +1,9 @@
 #include "norm_calc/norm_calc.h"
 #include "norm_calc/edge_grid.h"
 
+#include <iostream>
+using namespace std;
+
 bool normCalc(pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_holes,
               pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud,
               pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud_downSampled,
@@ -17,6 +20,20 @@ bool normCalc(pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_holes,
 {
 
   cout << "input cloud: " << cloud->points.size () << endl;
+
+  // DEBUG: Print actual data range
+  if (cloud->points.size() > 0) {
+    float minX=1e9, maxX=-1e9, minY=1e9, maxY=-1e9, minZ=1e9, maxZ=-1e9;
+    for (const auto& p : cloud->points) {
+      minX = std::min(minX, p.x); maxX = std::max(maxX, p.x);
+      minY = std::min(minY, p.y); maxY = std::max(maxY, p.y);
+      minZ = std::min(minZ, p.z); maxZ = std::max(maxZ, p.z);
+    }
+    cout << "Point cloud actual range:" << endl;
+    cout << "  X: [" << minX << ", " << maxX << "] (filter: [" << chiselParam.XMIN - chiselParam.BORDER_WIDTH << ", " << chiselParam.XMAX + chiselParam.BORDER_WIDTH << "])" << endl;
+    cout << "  Y: [" << minY << ", " << maxY << "] (filter: [" << chiselParam.YMIN - chiselParam.BORDER_WIDTH << ", " << chiselParam.YMAX + chiselParam.BORDER_WIDTH << "])" << endl;
+    cout << "  Z: [" << minZ << ", " << maxZ << "] (filter: [" << chiselParam.ZMIN << ", " << chiselParam.ZMAX << "])" << endl;
+  }
 
   // ********直通滤波start********
   pcl::PassThrough<pcl::PointXYZRGB> pass;
@@ -291,8 +308,8 @@ bool normCalc(pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_holes,
   //   }
   // }
 
-  cloud_tarPoint->width = gridParam.GRID_ROW;
-  cloud_tarPoint->height = 1;
+  cloud_tarPoint->width    = gridParam.GRID_ROW;
+  cloud_tarPoint->height   = 1;
   cloud_tarPoint->is_dense = false;
   cloud_tarPoint->points.resize(cloud_tarPoint->width * cloud_tarPoint->height);
   for(size_t i = 0; i < cloud_tarPoint->width; i++) // 输出结果
@@ -343,7 +360,6 @@ bool normCalc(pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_holes,
                             chiselParam.NORM_TH);
     }
   }
-
   float fRow, fCol;
   int indRow,indColumn;
   for (size_t i = 0; i < cloud_shrink->points.size(); i++) // 将符合条件的法向点归纳至4*6凿击区域类
@@ -407,8 +423,8 @@ bool normCalc(pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_holes,
     }
   }
   
-  cloud_tarPoint->width = chiselParam.BOX_ROW*chiselParam.BOX_COLUMN;
-  cloud_tarPoint->height = 1;
+  cloud_tarPoint->width    = chiselParam.BOX_ROW*chiselParam.BOX_COLUMN;
+  cloud_tarPoint->height   = 1;
   cloud_tarPoint->is_dense = false;
   cloud_tarPoint->points.resize(cloud_tarPoint->width * cloud_tarPoint->height);
   for(size_t i = 0; i < chiselParam.BOX_ROW*chiselParam.BOX_COLUMN; i++) // 输出结果

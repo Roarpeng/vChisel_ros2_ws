@@ -5,7 +5,7 @@ from snap7.util import *
 from snap7 import type as snap7_type
 
 class PLCDataWriter:
-    def __init__(self, plc_ip="192.168.1.36"):
+    def __init__(self, plc_ip="192.168.110.228"):
         self.plc_ip = plc_ip
         self.client = snap7.client.Client()
         self.db_number = 2120
@@ -110,7 +110,7 @@ def main():
     print("=" * 50)
     
     # PLC IP 地址
-    PLC_IP = "192.168.1.36"
+    PLC_IP = "192.168.110.228"
     
     writer = PLCDataWriter(PLC_IP)
     writer.interactive_write()

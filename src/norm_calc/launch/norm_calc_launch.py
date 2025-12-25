@@ -23,7 +23,7 @@ def generate_launch_description():
 
     norm_calc_node = Node(
         package='norm_calc',
-        executable='norm_calc_node',
+        executable='norm_calc_server',
         name='norm_calc',
         output='screen',
         parameters=[params_file]

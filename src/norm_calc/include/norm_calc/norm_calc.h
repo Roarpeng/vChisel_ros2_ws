@@ -12,7 +12,11 @@
 #include <pcl/surface/mls.h>
 #include <pcl/surface/gp3.h>
 #include <pcl/kdtree/kdtree_flann.h>
+// ROS2 includes
 #include "rclcpp/rclcpp.hpp"
+#include "sensor_msgs/msg/point_cloud2.hpp"
+#include "geometry_msgs/msg/pose_array.hpp"
+#include "norm_calc/srv/norm_calc_data.hpp"
 #include "norm_calc/chisel_box.h"
 #include "norm_calc/edge_grid.h"
 
@@ -23,6 +27,7 @@
 #define EDGE_ROW 20
 #define EDGE_COL 10
 
+// Function prototype for normCalc - updated for ROS2
 bool normCalc(pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_holes,
               pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud,
               pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud_downSampled,
@@ -37,4 +42,4 @@ bool normCalc(pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_holes,
               chisel_box::ChiselParam chiselParam,
               edge_grid::GridParam gridParam);
 
-#endif /* NORM_CALC_H */ 
+#endif /* NORM_CALC_H */
