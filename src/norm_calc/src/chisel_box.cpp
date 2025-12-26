@@ -1,16 +1,5 @@
 #include "norm_calc/chisel_box.h"
-// #include <ros/ros.h> // Remove ROS1 header
-#include "rclcpp/rclcpp.hpp" // Add ROS2 header if needed for logging or other functions
-#include <cmath> // Include cmath for abs() function
-#include <limits>
-
-// Define missing constants that were used in chisel_box.cpp
-#define BOX_LEN 0.05f
-#define XMIN -0.15f
-#define YMIN -0.1f
-#define ZMIN 0.4f
-#define ZMAX 0.65f
-
+// #include <ros/ros.h>
 namespace chisel_box
 {
 ChiselBox::ChiselBox(
@@ -19,184 +8,252 @@ ChiselBox::ChiselBox(
   float heightWeight,
   float curvWeight,
   float angleWeight,
-  float normTH)
+  float normTH):inBoxColumn(boxColumn), inAffectRadius(affectRadius), inHeightWeight(heightWeight),
+                inCurvWeight(curvWeight), inAngleWeight(angleWeight), inNormTH(normTH)
 {
-  inBoxColumn    = boxColumn;
-  inAffectRadius = affectRadius;
-  inHeightWeight = heightWeight;
-  inCurvWeight   = curvWeight;
-  inAngleWeight  = angleWeight;
-  inNormTH       = normTH;
-  reset();
+  isTarExist  = false;
+  num         = 0;
+  memset(indexList,0 ,NORM_NUM_MAX*sizeof(size_t));
+  memset(&bestPoint,0,sizeof(ChiselNormPoint));
+  bestIndex   = 0;
+  indexRow    = 0;
+  indexColumn = 0;
+  bestScore   = 0.0f;
 }
 
 ChiselBox::ChiselBox(const ChiselBox &obj)
 {
-  inBoxColumn    = obj.inBoxColumn;
-  inAffectRadius = obj.inAffectRadius;
-  inHeightWeight = obj.inHeightWeight;
-  inCurvWeight   = obj.inCurvWeight;
-  inAngleWeight  = obj.inAngleWeight;
-  inNormTH       = obj.inNormTH;
-  isTarExist     = obj.isTarExist;
-  num            = obj.num;
-  indexRow       = obj.indexRow;
-  indexColumn    = obj.indexColumn;
-  bestScore      = obj.bestScore;
-  bestIndex      = obj.bestIndex;
-  bestPoint      = obj.bestPoint;
-  for (size_t i = 0; i < NORM_NUM_MAX; i++)
-  {
-    indexList[i] = obj.indexList[i];
-  }
+
 }
 
-ChiselBox::~ChiselBox()
+ChiselBox::~ChiselBox(void)
 {
+
 }
 
+// 清零重置
 bool ChiselBox::reset(void)
 {
-  num = 0;
-  isTarExist = false;
-  bestScore = 0;
-  bestIndex = 0;
-  for (size_t i = 0; i < NORM_NUM_MAX; i++)
-  {
-    indexList[i] = 0;
-  }
+  isTarExist  = false;
+  num         = 0;
+  memset(indexList,0 ,NORM_NUM_MAX*sizeof(size_t));
+  memset(&bestPoint,0,sizeof(ChiselNormPoint));
+  bestIndex   = 0;
+  indexRow    = 0;
+  indexColumn = 0;
+  bestScore   = 0.0f;
   return true;
 }
 
+// 入选点
 bool ChiselBox::addPointInd(size_t index)
 {
-  if (num < NORM_NUM_MAX)
-  {
-    indexList[num] = index;
-    num++;
-    return true;
-  }
-  else
+  if(num >= NORM_NUM_MAX)
   {
     return false;
   }
+  indexList[num] = index;
+  num++;
+  
+  return true;
 }
 
-bool ChiselBox::voteTarPoint(pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud,pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_holes,size_t row, size_t column, ChiselNormPoint *tarPointList)
+// 最佳点投票
+bool ChiselBox::voteTarPoint(pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud,pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_holes, size_t row, size_t column, ChiselNormPoint *tarPointList)
 {
-  indexRow = row;
+  float score = 0.0f;
+  float heightScore = 0.0f;
+  float curvScore = 0.0f;
+  float angleScore;
+  float holeScore = 0.0f;
+  float grayScore = 0.0f;
+  float hX, hY, hD;
+  float dist  = 0.0f;
+  size_t ind;
+  uint8_t grayVal;
+  indexRow    = row;
   indexColumn = column;
-  float bX = (indexColumn * BOX_LEN) + XMIN;
-  float bY = (indexRow * BOX_LEN) + YMIN;
-  float bZ = ZMIN;
-  float tX = bX + BOX_LEN;
-  float tY = bY + BOX_LEN;
-  float tZ = ZMAX;
 
-  for (size_t i = 0; i < num; i++)
+  size_t thOver = 0;
+
+  if(num > 0)
   {
-    if (cloud->points[indexList[i]].x > bX &&
-        cloud->points[indexList[i]].x < tX &&
-        cloud->points[indexList[i]].y > bY &&
-        cloud->points[indexList[i]].y < tY &&
-        cloud->points[indexList[i]].z > bZ &&
-        cloud->points[indexList[i]].z < tZ)
+    for(size_t i = 0; i < num; i++)
     {
-      float score = 0;
-      score += (cloud->points[indexList[i]].curvature * inCurvWeight);
-      score += (abs(cloud->points[indexList[i]].normal_z) * inAngleWeight);
-      score += (cloud->points[indexList[i]].z * inHeightWeight);
+      // 角度太大直接放弃
+      if (fabs(cloud->points[indexList[i]].normal_z) <= inNormTH)
+      {
+        thOver++;
+        continue;
+      }
+      // 深度太深直接放弃
+      if (cloud->points[indexList[i]].z > 0.56f)
+      {
+        continue;
+      }
+
+
+      if(indexRow > 0) // 非第一排
+      {
+        if(indexColumn > 0)
+        {
+          // 左上方点避重叠
+          ind = (indexRow - 1) * inBoxColumn + (indexColumn  - 1);
+          if(tarPointList[ind].status)
+          {
+            dist = pow(cloud->points[indexList[i]].x - tarPointList[ind].ox, 2) + pow(cloud->points[indexList[i]].y - tarPointList[ind].oy, 2);
+            if (dist < inAffectRadius)
+            {
+              continue;
+            }
+          }
+          // 左方点避重叠
+          ind = indexRow * inBoxColumn + indexColumn - 1;
+          if(tarPointList[ind].status)
+          {
+            dist = pow(cloud->points[indexList[i]].x - tarPointList[ind].ox, 2) + pow(cloud->points[indexList[i]].y - tarPointList[ind].oy, 2);
+            if (dist < inAffectRadius)
+            {
+              continue;
+            }
+          }
+        }
+        // 上方点避重叠
+        ind = (indexRow - 1) * inBoxColumn + indexColumn;
+        if(tarPointList[ind].status)
+        {
+          dist = pow(cloud->points[indexList[i]].x - tarPointList[ind].ox, 2) + pow(cloud->points[indexList[i]].y - tarPointList[ind].oy, 2);
+          if (dist < inAffectRadius)
+          {
+            continue;
+          }
+        }
+        // 右上方点避重叠
+        if(indexColumn < inBoxColumn - 1)
+        {
+          ind = (indexRow - 1) * inBoxColumn + (indexColumn  + 1);
+          if(tarPointList[ind].status)
+          {
+            dist = pow(cloud->points[indexList[i]].x - tarPointList[ind].ox, 2) + pow(cloud->points[indexList[i]].y - tarPointList[ind].oy, 2);
+            if (dist < inAffectRadius)
+            {
+              continue;
+            }
+          }
+        }
+      }
+      else // 第一排
+      {
+        // 左方点避重叠
+        if(indexColumn > 0)
+        {
+          ind = indexRow * inBoxColumn + indexColumn - 1;
+          if(tarPointList[ind].status)
+          {
+            dist = pow(cloud->points[indexList[i]].x - tarPointList[ind].ox, 2) + pow(cloud->points[indexList[i]].y - tarPointList[ind].oy, 2);
+            if (dist < inAffectRadius)
+            {
+              continue;
+            }
+          }
+        }
+      }
+
+      // 空洞影响计算
+      holeScore = 0.0f;
+      for (size_t holeInd = 0; holeInd < cloud_holes->points.size(); holeInd++)
+      {
+        hX = fabs(cloud_holes->points[holeInd].x - cloud->points[indexList[i]].x);
+        hY = fabs(cloud_holes->points[holeInd].y - cloud->points[indexList[i]].y);
+        hD = sqrt(hX*hX + hY*hY);
+
+        float gap = 0.04f;
+        if (hD < gap)
+        {
+           holeScore += gap / (hD + gap / 10.0f) - 10.0f/11.0f;
+        }
+      }
+
+      if (holeScore > 10.0f)
+      {
+        holeScore = 10.0f;
+      }
+
+      // 灰度影响计算
+      // grayVal = (uint8_t)((cloud->points[indexList[i]].r * 19595 +
+      //                     cloud->points[indexList[i]].g * 38469 +
+      //                     cloud->points[indexList[i]].b * 7472) >> 16);
+      grayVal = (uint8_t)cloud->points[indexList[i]].a;
+      grayScore = (float)grayVal / 500.0f;
+
+      // 高度影响
+      heightScore = inHeightWeight * cloud->points[indexList[i]].z;
+
+      // 曲率影响
+      curvScore =  inCurvWeight * fabs(cloud->points[indexList[i]].curvature);
+
+      // 角度影响
+      angleScore = inAngleWeight * fabs(cloud->points[indexList[i]].normal_z);
+      // 得分计算
+      score = 100.0f 
+            - heightScore
+            - curvScore
+            + angleScore 
+            - 0.1f*holeScore
+            + grayScore;
+      // score = 100.0f 
+      //       - heightScore
+      //       - curvScore
+      //       + angleScore 
+      //       - 0.1f*holeScore;
+
+      // if (cloud->points[indexList[i]].x > -0.15f && cloud->points[indexList[i]].x < -0.125f
+      // && cloud->points[indexList[i]].y > -0.075f && cloud->points[indexList[i]].y < -0.05f)
+      // {
+      //   ROS_INFO("xxx,y,z= %f,%f, %f",cloud->points[indexList[i]].x, cloud->points[indexList[i]].y, cloud->points[indexList[i]].z );
+      //   ROS_INFO("height, curv, angle, hole, gray, total= %f,%f, %f, %f, %f, %f",heightScore,curvScore,angleScore,holeScore, grayScore, score);
+      // }
+      
       if (score > bestScore)
       {
         bestScore = score;
         bestIndex = indexList[i];
-        bestPoint.status = true;
-        bestPoint.ox = cloud->points[indexList[i]].x;
-        bestPoint.oy = cloud->points[indexList[i]].y;
-        bestPoint.oz = cloud->points[indexList[i]].z;
-        bestPoint.nx = cloud->points[indexList[i]].normal_x;
-        bestPoint.ny = cloud->points[indexList[i]].normal_y;
-        bestPoint.nz = cloud->points[indexList[i]].normal_z;
-        bestPoint.curv = cloud->points[indexList[i]].curvature;
+        // ROS_INFO("x,y,z= %f,%f, %f",cloud->points[indexList[i]].x, cloud->points[indexList[i]].y, cloud->points[indexList[i]].z );
+        // ROS_INFO("height, curv, angle, hole, gray, total= %f,%f, %f, %f, %f, %f",heightScore,curvScore,angleScore,holeScore, grayScore, score);
       }
     }
-  }
-  if (bestScore != 0)
-  {
-    isTarExist = true;
-  }
 
-  // check if bestPoint is close to hole (use squared-distance compare to inAffectRadius)
-  float minDist2 = std::numeric_limits<float>::max();
-  for (size_t i = 0; i < cloud_holes->points.size(); i++)
-  {
-    float dx = cloud_holes->points[i].x - bestPoint.ox;
-    float dy = cloud_holes->points[i].y - bestPoint.oy;
-    float dz = cloud_holes->points[i].z - bestPoint.oz;
-    float dist2 = dx*dx + dy*dy + dz*dz;
-    if (dist2 < minDist2)
+    // ROS_INFO("THOVER = %d",thOver);
+    
+    if (bestScore > 0.0f)
     {
-      minDist2 = dist2;
+      isTarExist        = true;
+      bestPoint.status  = true;
+      bestPoint.ox      = cloud->points[bestIndex].x;
+      bestPoint.oy      = cloud->points[bestIndex].y;
+      bestPoint.oz      = cloud->points[bestIndex].z;
+      bestPoint.nx      = cloud->points[bestIndex].normal_x;
+      bestPoint.ny      = cloud->points[bestIndex].normal_y;
+      bestPoint.nz      = cloud->points[bestIndex].normal_z;
+      bestPoint.curv    = cloud->points[bestIndex].curvature;
+      return true;
     }
-  }
-
-  // Interpret inAffectRadius as radius^2 (consistent with ChiselParam comment). If inAffectRadius <= 0, skip check.
-  bool nearHole = false;
-  if (inAffectRadius > 0.0f && minDist2 < inAffectRadius)
-  {
-    nearHole = true;
-    isTarExist = false;
-  }
-
-  // For human-friendly logging compute actual minDist (sqrt) when available
-  float minDist = (minDist2 < std::numeric_limits<float>::max()) ? sqrt(minDist2) : 100.0f;
-
-  // Log detailed info for debugging why a box is accepted or rejected
-  std::string reason;
-  if (num == 0)
-  {
-    reason = "EMPTY";
-  }
-  else if (bestScore == 0)
-  {
-    reason = "NO_CANDIDATE_SCORE0";
-  }
-  else if (nearHole)
-  {
-    reason = "NEAR_HOLE";
-  }
-  else if (isTarExist)
-  {
-    reason = "SUCCESS";
+    else
+    {
+      return false;
+    }
   }
   else
   {
-    reason = "UNKNOWN_FAIL";
+    return false;
   }
-
-  float threshRad = (inAffectRadius > 0.0f) ? sqrt(inAffectRadius) : -1.0f;
-  RCLCPP_INFO(rclcpp::get_logger("norm_calc"), "box[%zu,%zu]: num=%zu bestScore=%.4f minDist=%.4f thresh=%.4f isTar=%d reason=%s",
-              indexRow, indexColumn, num, bestScore, minDist, threshRad, isTarExist ? 1 : 0, reason.c_str());
-
-  // Also print to stdout to ensure visibility regardless of rclcpp logger configuration
-  std::cout << "DBG_BOX[" << indexRow << "," << indexColumn << "] num=" << num
-            << " bestScore=" << bestScore << " minDist=" << minDist
-            << " thresh=" << threshRad
-            << " isTar=" << (isTarExist ? 1 : 0) << " reason=" << reason << std::endl;
-
-  return true;
 }
 
-bool ChiselBox::getTarStatus()
-{
-  return isTarExist;
-}
-
-bool ChiselBox::getTarPoint(ChiselNormPoint &tarPoint)
+// 获取最佳点状态
+bool ChiselBox::getTarStatus(void)
 {
   if (isTarExist)
   {
-    tarPoint = bestPoint;
     return true;
   }
   else
@@ -205,9 +262,25 @@ bool ChiselBox::getTarPoint(ChiselNormPoint &tarPoint)
   }
 }
 
+// 返回最佳点
+bool ChiselBox::getTarPoint(ChiselNormPoint &tarPoint)
+{
+  if (isTarExist)
+  {
+    memcpy(&tarPoint,&bestPoint,sizeof(ChiselNormPoint));
+    return true;
+  }
+  else
+  {
+    memset(&tarPoint,0,sizeof(ChiselNormPoint));
+    return false;
+  }
+}
+
+// 返回区域内入选点数
 size_t ChiselBox::getPointNum()
 {
   return num;
 }
 
-} // namespace chisel_box
+}
