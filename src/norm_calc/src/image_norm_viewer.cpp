@@ -233,7 +233,7 @@ private:
 
   void drawGrid(cv::Mat &img, int cols, int rows,
                 std::vector<cv::Point> &points_for_roi) {
-    cv::Scalar grid_color(100, 100, 100); // Gray
+    cv::Scalar grid_color(0, 255, 255); // Yellow
     int grid_thickness = 1;
 
     // Estimate a representative Z for the grid (using average or min Z)
