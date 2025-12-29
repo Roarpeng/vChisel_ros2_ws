@@ -36,7 +36,7 @@ class PLCClientNode(Node):
         super().__init__('plc_client_node')
 
         # Parameters (could be remapped via launch)
-        self.declare_parameter('plc_address', '192.168.1.36')
+        self.declare_parameter('plc_address', '192.168.50.225')
         self.declare_parameter('plc_rack', 0)
         self.declare_parameter('plc_slot', 1)
         self.declare_parameter('db_number', 2120)  # Updated to match the working test script
@@ -419,11 +419,18 @@ class PLCClientNode(Node):
             try:
                 # 修改相机启动参数，提高帧率从10到15fps，并禁用一些可能导致缓存的选项
                 cmd = ['ros2', 'run', 'realsense2_camera', 'realsense2_camera_node',
-                       '--ros-args', '-p', 'color_fps:=15.0', '-p', 'depth_fps:=15.0',
+                       '--ros-args', 
+                       '-p', 'rgb_camera.profile:=1280,720,15',
+                       '-p', 'depth_module.profile:=1280,720,15',
+                       '-p', 'color_width:=1280', '-p', 'color_height:=720',
+                       '-p', 'color_fps:=15.0',
+                       '-p', 'depth_width:=1280', '-p', 'depth_height:=720',
+                       '-p', 'depth_fps:=15.0',
                        '-p', 'enable_color:=true', '-p', 'enable_depth:=true',
+                       '-p', 'align_depth.enable:=true', '-p', 'align_depth:=true',
                        '-p', 'enable_gyro:=false', '-p', 'enable_accel:=false',
                        '-p', 'enable_infra1:=false', '-p', 'enable_infra2:=false',
-                       '-p', 'publish_tf:=false', '-p', 'align_depth:=true']
+                       '-p', 'publish_tf:=false']
                 self.cam_proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 self.camStatus = True
                 time.sleep(3)  # 增加等待时间确保相机完全启动

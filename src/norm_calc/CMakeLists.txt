@@ -87,10 +87,34 @@ ament_target_dependencies(norm_viewer
 rosidl_target_interfaces(norm_viewer
   ${PROJECT_NAME} "rosidl_typesupport_cpp")
 
+# image_norm_viewer executable
+add_executable(image_norm_viewer src/image_norm_viewer.cpp)
+
+# Link libraries for image_norm_viewer
+target_link_libraries(image_norm_viewer
+  ${PCL_LIBRARIES}
+  ${OpenCV_LIBS}
+)
+
+# Add dependencies for image_norm_viewer
+ament_target_dependencies(image_norm_viewer
+  rclcpp
+  sensor_msgs
+  geometry_msgs
+  pcl_conversions
+  pcl_ros
+  cv_bridge
+)
+
+# Add dependencies for generated messages
+rosidl_target_interfaces(image_norm_viewer
+  ${PROJECT_NAME} "rosidl_typesupport_cpp")
+
 # Install executables
 install(TARGETS
   norm_calc_server
   norm_viewer
+  image_norm_viewer
   DESTINATION lib/${PROJECT_NAME}
 )
 

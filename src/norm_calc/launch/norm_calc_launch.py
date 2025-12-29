@@ -29,9 +29,17 @@ def generate_launch_description():
         parameters=[params_file]
     )
 
+    image_norm_viewer_node = Node(
+        package='norm_calc',
+        executable='image_norm_viewer',
+        name='image_norm_viewer',
+        output='screen'
+    )
+
     return LaunchDescription([
         # realsense_node,
-        norm_calc_node
+        norm_calc_node,
+        image_norm_viewer_node
     ])
 
 

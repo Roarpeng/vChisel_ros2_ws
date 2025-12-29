@@ -1,223 +1,210 @@
-#include "rclcpp/rclcpp.hpp"
-#include "sensor_msgs/msg/image.hpp"
-#include "sensor_msgs/msg/camera_info.hpp"
-#include "geometry_msgs/msg/pose_array.hpp"
 #include "cv_bridge/cv_bridge.h"
-#include <opencv2/opencv.hpp>
+#include "geometry_msgs/msg/pose_array.hpp"
+#include "rclcpp/rclcpp.hpp"
+#include "sensor_msgs/msg/camera_info.hpp"
+#include "sensor_msgs/msg/image.hpp"
+#include <mutex>
 #include <opencv2/highgui/highgui.hpp>
-#include <pcl_conversions/pcl_conversions.h>
-#include <pcl/point_cloud.h>
-#include <pcl/point_types.h>
+#include <opencv2/opencv.hpp>
 
 using namespace std::placeholders;
 
-class ImageNormViewerNode : public rclcpp::Node
-{
+class ImageNormViewerNode : public rclcpp::Node {
 public:
-    ImageNormViewerNode() : Node("image_norm_viewer")
-    {
-        RCLCPP_INFO(this->get_logger(), "Starting ImageNormViewer ROS2 node...");
+  ImageNormViewerNode() : Node("image_norm_viewer") {
+    RCLCPP_INFO(this->get_logger(),
+                "Starting ImageNormViewer ROS2 node (Result Only)...");
 
-        // Subscribe to image, camera info, and norm calculation result topics
-        img_sub_ = this->create_subscription<sensor_msgs::msg::Image>(
-            "camera/camera/color/image_raw", 10,
-            std::bind(&ImageNormViewerNode::imageCallback, this, std::placeholders::_1));
-        
-        cam_info_sub_ = this->create_subscription<sensor_msgs::msg::CameraInfo>(
-            "camera/camera/depth/camera_info", 10,
-            std::bind(&ImageNormViewerNode::cameraInfoCallback, this, std::placeholders::_1));
-        
-        pose_sub_ = this->create_subscription<geometry_msgs::msg::PoseArray>(
-            "norm_calc_result", 10,
-            std::bind(&ImageNormViewerNode::poseCallback, this, std::placeholders::_1));
+    // Subscription to captured image (the snapshot used for calc)
+    captured_img_sub_ = this->create_subscription<sensor_msgs::msg::Image>(
+        "captured_image", 10,
+        std::bind(&ImageNormViewerNode::capturedImageCallback, this, _1));
 
-        RCLCPP_INFO(this->get_logger(), "ImageNormViewer node initialized.");
-        
-        // Store the window name to use in destructor
-        window_name_ = "Image with Norm Calculation Results";
-        
-        // Initialize OpenCV window
-        cv::namedWindow(window_name_, cv::WINDOW_AUTOSIZE);
-        cv::startWindowThread(); // Important for keeping the window responsive
-    }
+    // Subscription to visual norm results (camera frame points)
+    pose_sub_ = this->create_subscription<geometry_msgs::msg::PoseArray>(
+        "visual_norm_result", 10,
+        std::bind(&ImageNormViewerNode::poseCallback, this, _1));
 
-    ~ImageNormViewerNode()
-    {
-        cv::destroyAllWindows();
-    }
+    // Subscription to camera info for projection (using aligned info to match
+    // color frame)
+    cam_info_sub_ = this->create_subscription<sensor_msgs::msg::CameraInfo>(
+        "camera/camera/aligned_depth_to_color/camera_info", 10,
+        std::bind(&ImageNormViewerNode::cameraInfoCallback, this, _1));
+
+    window_name_ = "Norm Calculation Result";
+    cv::namedWindow(window_name_, cv::WINDOW_AUTOSIZE);
+    cv::startWindowThread();
+
+    RCLCPP_INFO(this->get_logger(), "Result-only Viewer initialized.");
+  }
+
+  ~ImageNormViewerNode() { cv::destroyAllWindows(); }
 
 private:
-    rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr img_sub_;
-    rclcpp::Subscription<sensor_msgs::msg::CameraInfo>::SharedPtr cam_info_sub_;
-    rclcpp::Subscription<geometry_msgs::msg::PoseArray>::SharedPtr pose_sub_;
-    
-    cv::Mat current_image_;
-    std::vector<geometry_msgs::msg::Pose> latest_poses_;
-    sensor_msgs::msg::CameraInfo current_camera_info_;
-    std::mutex data_mutex_;
-    bool image_updated_ = false;
-    bool camera_info_received_ = false;
-    std::string window_name_;
+  rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr captured_img_sub_;
+  rclcpp::Subscription<sensor_msgs::msg::CameraInfo>::SharedPtr cam_info_sub_;
+  rclcpp::Subscription<geometry_msgs::msg::PoseArray>::SharedPtr pose_sub_;
 
-    void imageCallback(const sensor_msgs::msg::Image::ConstSharedPtr msg)
-    {
-        try 
-        {
-            cv_bridge::CvImagePtr cv_ptr = cv_bridge::toCvCopy(msg, sensor_msgs::image_encodings::RGB8);
-            std::lock_guard<std::mutex> lock(data_mutex_);
-            current_image_ = cv_ptr->image.clone();
-            image_updated_ = true;
-        } 
-        catch (cv_bridge::Exception& e) 
-        {
-            RCLCPP_ERROR(this->get_logger(), "cv_bridge exception: %s", e.what());
-        }
+  cv::Mat current_result_image_;
+  std::vector<geometry_msgs::msg::Pose> latest_poses_;
+  sensor_msgs::msg::CameraInfo current_camera_info_;
+  std::mutex data_mutex_;
+  bool camera_info_received_ = false;
+  std::string window_name_;
+
+  void
+  capturedImageCallback(const sensor_msgs::msg::Image::ConstSharedPtr msg) {
+    try {
+      cv_bridge::CvImagePtr cv_ptr =
+          cv_bridge::toCvCopy(msg, sensor_msgs::image_encodings::BGR8);
+      std::lock_guard<std::mutex> lock(data_mutex_);
+      current_result_image_ = cv_ptr->image.clone();
+      RCLCPP_INFO(this->get_logger(), "New result snapshot received: %dx%d",
+                  current_result_image_.cols, current_result_image_.rows);
+      updateDisplay();
+    } catch (cv_bridge::Exception &e) {
+      RCLCPP_ERROR(this->get_logger(), "cv_bridge exception: %s", e.what());
+    }
+  }
+
+  void
+  cameraInfoCallback(const sensor_msgs::msg::CameraInfo::ConstSharedPtr msg) {
+    std::lock_guard<std::mutex> lock(data_mutex_);
+    current_camera_info_ = *msg;
+    if (!camera_info_received_) {
+      RCLCPP_INFO(this->get_logger(), "Camera info received: %dx%d", msg->width,
+                  msg->height);
+    }
+    camera_info_received_ = true;
+  }
+
+  void poseCallback(const geometry_msgs::msg::PoseArray::ConstSharedPtr msg) {
+    std::lock_guard<std::mutex> lock(data_mutex_);
+    latest_poses_ = msg->poses;
+    RCLCPP_INFO(this->get_logger(), "Received %zu visual points for overlay.",
+                latest_poses_.size());
+    updateDisplay();
+  }
+
+  cv::Point project3DTo2D(double x, double y, double z, int img_cols,
+                          int img_rows) {
+    if (!camera_info_received_)
+      return cv::Point(-1, -1);
+
+    double fx = current_camera_info_.k[0];
+    double fy = current_camera_info_.k[4];
+    double cx = current_camera_info_.k[2];
+    double cy = current_camera_info_.k[5];
+
+    // Auto-scale intrinsics if resolution mismatch (e.g. 1280x720 image vs
+    // 848x480 info)
+    if (current_camera_info_.width != 0 && current_camera_info_.height != 0) {
+      double scale_x =
+          static_cast<double>(img_cols) / current_camera_info_.width;
+      double scale_y =
+          static_cast<double>(img_rows) / current_camera_info_.height;
+      fx *= scale_x;
+      fy *= scale_y;
+      cx *= scale_x;
+      cy *= scale_y;
     }
 
-    void cameraInfoCallback(const sensor_msgs::msg::CameraInfo::ConstSharedPtr msg)
-    {
-        std::lock_guard<std::mutex> lock(data_mutex_);
-        current_camera_info_ = *msg;
-        camera_info_received_ = true;
+    if (z < 0.001)
+      return cv::Point(-1, -1);
+    return cv::Point(static_cast<int>((x * fx / z) + cx),
+                     static_cast<int>((y * fy / z) + cy));
+  }
+
+  void updateDisplay() {
+    if (current_result_image_.empty()) {
+      return;
     }
 
-    void poseCallback(const geometry_msgs::msg::PoseArray::ConstSharedPtr msg)
-    {
-        std::lock_guard<std::mutex> lock(data_mutex_);
-        latest_poses_ = msg->poses;
-        
-        RCLCPP_INFO(this->get_logger(), "Received %zu norm calculation results", latest_poses_.size());
+    cv::Mat display_mat = current_result_image_.clone();
+    int cols = display_mat.cols;
+    int rows = display_mat.rows;
+    std::vector<cv::Point> all_visual_points;
+
+    if (latest_poses_.empty()) {
+      RCLCPP_WARN(this->get_logger(),
+                  "updateDisplay called but latest_poses_ is empty.");
     }
 
-    // Function to project 3D point to 2D image coordinates
-    cv::Point project3DTo2D(double x, double y, double z) 
-    {
-        std::lock_guard<std::mutex> lock(data_mutex_);
-        if (!camera_info_received_ || current_image_.empty()) {
-            // Return center of image as default if camera info not available
-            return cv::Point(320, 240); // Default for 640x480 image
-        }
+    for (size_t i = 0; i < latest_poses_.size(); ++i) {
+      const auto &p = latest_poses_[i];
 
-        // Use camera intrinsic parameters to project 3D point to 2D
-        double fx = current_camera_info_.k[0]; // focal length x
-        double fy = current_camera_info_.k[4]; // focal length y
-        double cx = current_camera_info_.k[2]; // principal point x
-        double cy = current_camera_info_.k[5]; // principal point y
+      // Project 3D center
+      cv::Point center =
+          project3DTo2D(p.position.x, p.position.y, p.position.z, cols, rows);
 
-        if (z <= 0.001) z = 0.001; // Avoid division by zero or negative depth
+      if (center.x >= 0 && center.x < cols && center.y >= 0 &&
+          center.y < rows) {
+        all_visual_points.push_back(center);
 
-        int u = static_cast<int>((x * fx / z) + cx);
-        int v = static_cast<int>((y * fy / z) + cy);
+        // Draw normal point (larger circle)
+        cv::circle(display_mat, center, 8, cv::Scalar(0, 255, 0), -1);
 
-        return cv::Point(u, v);
-    }
+        // Project 3D vector end point for proper perspective (e.g. 5cm length)
+        double vector_len = 0.05;
+        cv::Point end = project3DTo2D(
+            p.position.x + p.orientation.x * vector_len,
+            p.position.y + p.orientation.y * vector_len,
+            p.position.z + p.orientation.z * vector_len, cols, rows);
 
-    void displayImageWithNorms()
-    {
-        std::lock_guard<std::mutex> lock(data_mutex_);
-        
-        if (current_image_.empty()) {
-            // If window was previously created, destroy it
-            if (window_created_) {
-                cv::destroyWindow(window_name_);
-                window_created_ = false;
-            }
-            return; // Don't display anything if no image is received
-        }
-
-        // Create window if not already created
-        if (!window_created_) {
-            cv::namedWindow(window_name_, cv::WINDOW_AUTOSIZE);
-            cv::startWindowThread();
-            window_created_ = true;
-        }
-
-        cv::Mat display_image = current_image_.clone();
-        
-        // Draw norm calculation results on the image only if we have poses
-        if (!latest_poses_.empty()) {
-            for (size_t i = 0; i < latest_poses_.size(); ++i) 
-            {
-                const auto& pose = latest_poses_[i];
-                
-                // Project 3D position to 2D image coordinates
-                cv::Point center = project3DTo2D(pose.position.x, pose.position.y, pose.position.z);
-                
-                // Check if the point is within the image bounds
-                if (center.x >= 0 && center.x < display_image.cols && 
-                    center.y >= 0 && center.y < display_image.rows) 
-                {
-                    // Draw position as a circle
-                    cv::circle(display_image, center, 8, cv::Scalar(0, 255, 0), 2);
-                    
-                    // Draw normal direction as an arrow
-                    // Calculate end point of the normal vector (scale factor for visibility)
-                    double normal_scale = 30.0; 
-                    cv::Point end_point(
-                        center.x + static_cast<int>(pose.orientation.x * normal_scale),
-                        center.y + static_cast<int>(pose.orientation.y * normal_scale)
-                    );
-                    
-                    // Ensure end point is within image bounds
-                    end_point.x = std::max(0, std::min(display_image.cols - 1, end_point.x));
-                    end_point.y = std::max(0, std::min(display_image.rows - 1, end_point.y));
-                    
-                    // Draw the normal vector as an arrow
-                    cv::arrowedLine(display_image, center, end_point, cv::Scalar(0, 0, 255), 2, 8, 0, 0.1);
-                    
-                    // Add text label
-                    std::string label = "P" + std::to_string(i);
-                    cv::putText(display_image, label, 
-                               cv::Point(center.x + 10, center.y), 
-                               cv::FONT_HERSHEY_SIMPLEX, 0.4, cv::Scalar(255, 255, 255), 1);
-                }
-            }
-            
-            // Add title indicating both image and norm results are shown
-            cv::putText(display_image, "Image + Norm Results", 
-                       cv::Point(10, 30), 
-                       cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(255, 255, 255), 2);
+        if (end.x >= 0 && end.x < cols && end.y >= 0 && end.y < rows) {
+          all_visual_points.push_back(end);
+          cv::arrowedLine(display_mat, center, end, cv::Scalar(0, 0, 255), 3, 8,
+                          0, 0.3);
         } else {
-            // Only show the original image without norm results
-            cv::putText(display_image, "Live Camera Image", 
-                       cv::Point(10, 30), 
-                       cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(255, 255, 255), 2);
+          // 2D fallback if 3D projection of vector end is outside
+          cv::line(display_mat, center,
+                   cv::Point(center.x + p.orientation.x * 30,
+                             center.y + p.orientation.y * 30),
+                   cv::Scalar(0, 0, 255), 3);
         }
-        
-        // Display the image
-        cv::imshow(window_name_, display_image);
-        cv::waitKey(1);
+
+        // Draw label
+        cv::putText(display_mat, std::to_string(i),
+                    cv::Point(center.x + 10, center.y - 10),
+                    cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(255, 255, 0), 2);
+      } else {
+        if (i < 5) {
+          RCLCPP_WARN(this->get_logger(),
+                      "Point %zu out of bounds: 3D(%f, %f, %f) -> 2D(%d, %d)",
+                      i, p.position.x, p.position.y, p.position.z, center.x,
+                      center.y);
+        }
+      }
     }
 
-private:
-    bool window_created_ = false; // Track if window has been created
-    
-public:
-    void run()
-    {
-        rclcpp::Rate rate(30); // 30 Hz display rate
-        
-        while (rclcpp::ok()) 
-        {
-            // Handle incoming messages
-            rclcpp::spin_some(shared_from_this());
-            
-            // Update the display
-            displayImageWithNorms();
-            
-            rate.sleep();
-        }
+    if (!all_visual_points.empty()) {
+      cv::Rect roi = cv::boundingRect(all_visual_points);
+      int padding = 150;
+      roi.x = std::max(0, roi.x - padding);
+      roi.y = std::max(0, roi.y - padding);
+      roi.width = std::min(cols - roi.x, roi.width + 2 * padding);
+      roi.height = std::min(rows - roi.y, roi.height + 2 * padding);
+
+      if (roi.width > 20 && roi.height > 20) {
+        display_mat = display_mat(roi).clone();
+      }
+    } else if (!latest_poses_.empty()) {
+      RCLCPP_ERROR(this->get_logger(),
+                   "No points could be projected onto the image!");
     }
+
+    cv::putText(display_mat, "Norm Result Area (ROI)", cv::Point(20, 40),
+                cv::FONT_HERSHEY_SIMPLEX, 0.8, cv::Scalar(255, 255, 255), 2);
+
+    cv::imshow(window_name_, display_mat);
+    cv::waitKey(1);
+  }
 };
 
-int main(int argc, char **argv)
-{
-    rclcpp::init(argc, argv);
-    auto node = std::make_shared<ImageNormViewerNode>();
-    
-    // Run the display loop in the main thread and handle ROS callbacks periodically
-    node->run();
-    
-    rclcpp::shutdown();
-    return 0;
+int main(int argc, char **argv) {
+  rclcpp::init(argc, argv);
+  auto node = std::make_shared<ImageNormViewerNode>();
+  rclcpp::spin(node);
+  rclcpp::shutdown();
+  return 0;
 }

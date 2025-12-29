@@ -23,7 +23,8 @@ pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud_allNorm (new pcl::PointCloud<
 pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_holes (new pcl::PointCloud<pcl::PointXYZ>);
 pcl::PolygonMesh::Ptr triangles (new pcl::PolygonMesh);
 
-pcl::visualization::PCLVisualizer viewer("PCL Viewer");
+// 使用智能指针延迟初始化，避免在程序启动时初始化 X11 资源
+std::shared_ptr<pcl::visualization::PCLVisualizer> viewer;
 
 bool dataRefresh = false;
 
@@ -46,65 +47,97 @@ void cloudCallBack(
 
 void cloudViewer()
 {
-    if (dataRefresh)
+    // 首次收到数据时才初始化 viewer
+    if (!viewer && dataRefresh)
     {
-        viewer.removeAllShapes();
-        viewer.removeAllPointClouds();
-        viewer.setBackgroundColor (0.0, 0.0, 0.3);
+        try
+        {
+            viewer.reset(new pcl::visualization::PCLVisualizer("PCL Viewer"));
+            viewer->setBackgroundColor(0.0, 0.0, 0.3);
+            viewer->setCameraPosition(0, 0, -1, 0, 0, 1, 0, -1, 0);
+            viewer->setPosition(1000, 500);
+            viewer->setSize(640, 480);
+            RCLCPP_INFO(rclcpp::get_logger("norm_viewer"), "PCL Visualizer initialized on first data");
+        }
+        catch (const std::exception& e)
+        {
+            RCLCPP_ERROR(rclcpp::get_logger("norm_viewer"), "Failed to initialize PCL Visualizer: %s", e.what());
+            dataRefresh = false;
+            return;
+        }
+    }
+
+    if (viewer && dataRefresh)
+    {
+        viewer->removeAllShapes();
+        viewer->removeAllPointClouds();
+        viewer->setBackgroundColor (0.0, 0.0, 0.3);
 
         pcl::visualization::PointCloudColorHandlerRGBField<pcl::PointXYZRGB> rgb(cloud_smoothed);
-        viewer.addPointCloud<pcl::PointXYZRGB>(cloud_smoothed,rgb,"cloud_smoothed");
-        viewer.setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_POINT_SIZE,3,"cloud_smoothed");
+        viewer->addPointCloud<pcl::PointXYZRGB>(cloud_smoothed,rgb,"cloud_smoothed");
+        viewer->setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_POINT_SIZE,3,"cloud_smoothed");
 
-        viewer.addPointCloudNormals<pcl::PointXYZRGBNormal>(cloud_tarPoint,1,0.1,"cloud_tarPoint");
-        viewer.setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_LINE_WIDTH,5,"cloud_tarPoint");
-        viewer.setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_COLOR,1,0,0,"cloud_tarPoint");
+        viewer->addPointCloudNormals<pcl::PointXYZRGBNormal>(cloud_tarPoint,1,0.1,"cloud_tarPoint");
+        viewer->setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_LINE_WIDTH,5,"cloud_tarPoint");
+        viewer->setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_COLOR,1,0,0,"cloud_tarPoint");
 
-        // viewer.addPointCloudNormals<pcl::PointXYZRGBNormal>(cloud_allNorm,1,0.1,"cloud_allNorm");
-        // viewer.setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_LINE_WIDTH,1,"cloud_allNorm");
-        // viewer.setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_COLOR,0,1,0,"cloud_allNorm");
+        // viewer->addPointCloudNormals<pcl::PointXYZRGBNormal>(cloud_allNorm,1,0.1,"cloud_allNorm");
+        // viewer->setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_LINE_WIDTH,1,"cloud_allNorm");
+        // viewer->setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_COLOR,0,1,0,"cloud_allNorm");
 
-        viewer.addPointCloud<pcl::PointXYZ>(cloud_holes,"cloud_holes");
-        viewer.setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_POINT_SIZE,10,"cloud_holes");
-        viewer.setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_COLOR,0,1,0,"cloud_holes");
+        viewer->addPointCloud<pcl::PointXYZ>(cloud_holes,"cloud_holes");
+        viewer->setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_POINT_SIZE,10,"cloud_holes");
+        viewer->setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_COLOR,0,1,0,"cloud_holes");
 
-        // viewer.addPolygonMesh(*triangles,"triangles");
+        // viewer->addPolygonMesh(*triangles,"triangles");
 
 
         std::string id = std::to_string(0);
-        viewer.addLine<pcl::PointXYZ>(pcl::PointXYZ(-0.165, -0.115, 0.46),pcl::PointXYZ(0.165, -0.115, 0.46),255,0,0,id);
+        viewer->addLine<pcl::PointXYZ>(pcl::PointXYZ(-0.165, -0.115, 0.46),pcl::PointXYZ(0.165, -0.115, 0.46),255,0,0,id);
         for (int i = 1; i < 4; i++)
         {
             id = std::to_string(i);
-            viewer.addLine<pcl::PointXYZ>(pcl::PointXYZ(-0.165, 0.05*i - 0.1, 0.46),pcl::PointXYZ(0.165, 0.05*i - 0.1, 0.46),255,0,0,id);
+            viewer->addLine<pcl::PointXYZ>(pcl::PointXYZ(-0.165, 0.05*i - 0.1, 0.46),pcl::PointXYZ(0.165, 0.05*i - 0.1, 0.46),255,0,0,id);
         }
         id = std::to_string(4);
-        viewer.addLine<pcl::PointXYZ>(pcl::PointXYZ(-0.165, 0.115, 0.46),pcl::PointXYZ(0.165, 0.115, 0.46),255,0,0,id);
+        viewer->addLine<pcl::PointXYZ>(pcl::PointXYZ(-0.165, 0.115, 0.46),pcl::PointXYZ(0.165, 0.115, 0.46),255,0,0,id);
 
         id = std::to_string(5);
-        viewer.addLine<pcl::PointXYZ>(pcl::PointXYZ(-0.165, -0.115, 0.46),pcl::PointXYZ(-0.165, 0.115, 0.46),255,0,0,id);
+        viewer->addLine<pcl::PointXYZ>(pcl::PointXYZ(-0.165, -0.115, 0.46),pcl::PointXYZ(-0.165, 0.115, 0.46),255,0,0,id);
         for (int j = 1; j < 6; j++)
         {
             id = std::to_string(5+j);
-            viewer.addLine<pcl::PointXYZ>(pcl::PointXYZ(0.05*j-0.15, -0.125, 0.46),pcl::PointXYZ(0.05*j-0.15, 0.115, 0.46),255,0,0,id);
+            viewer->addLine<pcl::PointXYZ>(pcl::PointXYZ(0.05*j-0.15, -0.125, 0.46),pcl::PointXYZ(0.05*j-0.15, 0.115, 0.46),255,0,0,id);
         }
         id = std::to_string(11);
-        viewer.addLine<pcl::PointXYZ>(pcl::PointXYZ(0.165, -0.115, 0.46),pcl::PointXYZ(0.165, 0.115, 0.46),255,0,0,id);
+        viewer->addLine<pcl::PointXYZ>(pcl::PointXYZ(0.165, -0.115, 0.46),pcl::PointXYZ(0.165, 0.115, 0.46),255,0,0,id);
 
 
-        viewer.addCoordinateSystem (0.2);
-        viewer.setCameraPosition(0,0,-1,0,0,1,0,-1,0);
-        viewer.setRepresentationToSurfaceForAllActors(); //网格模型以面片形式显示
+        viewer->addCoordinateSystem (0.2);
+        viewer->setCameraPosition(0,0,-1,0,0,1,0,-1,0);
+        viewer->setRepresentationToSurfaceForAllActors(); //网格模型以面片形式显示
 
         dataRefresh = false;
     }
-    viewer.spinOnce ();
+    if (viewer)
+    {
+        try
+        {
+            viewer->spinOnce();
+        }
+        catch (const std::exception& e)
+        {
+            RCLCPP_ERROR(rclcpp::get_logger("norm_viewer"), "Error in spinOnce: %s", e.what());
+        }
+    }
 }
 
 int main(int argc, char** argv)
 {
     rclcpp::init(argc, argv);
     auto node = rclcpp::Node::make_shared("norm_viewer");
+
+    RCLCPP_INFO(rclcpp::get_logger("norm_viewer"), "norm_viewer node started, waiting for data...");
 
     // Using message_filters for time synchronization in ROS2
     message_filters::Subscriber<sensor_msgs::msg::PointCloud2> subSmoothedData(node, "smoothedData");
@@ -123,11 +156,16 @@ int main(int argc, char** argv)
     sync.registerCallback(std::bind(&cloudCallBack, std::placeholders::_1, std::placeholders::_2,
                                    std::placeholders::_3, std::placeholders::_4, std::placeholders::_5));
 
-    viewer.setPosition(1000,500);
-
     rclcpp::Rate loop_rate(10);
-    while(rclcpp::ok() && !viewer.wasStopped())
+    while(rclcpp::ok())
     {
+        // 检查 viewer 是否已停止
+        if (viewer && viewer->wasStopped())
+        {
+            RCLCPP_INFO(rclcpp::get_logger("norm_viewer"), "Viewer stopped, shutting down...");
+            break;
+        }
+
         rclcpp::spin_some(node);
         cloudViewer();
         loop_rate.sleep();
