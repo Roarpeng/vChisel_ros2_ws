@@ -33,7 +33,8 @@ def generate_launch_description():
         package='norm_calc',
         executable='image_norm_viewer',
         name='image_norm_viewer',
-        output='screen'
+        output='screen',
+        parameters=[params_file]
     )
 
     return LaunchDescription([

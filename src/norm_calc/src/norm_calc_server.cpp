@@ -703,8 +703,40 @@ private:
         pcl::PointCloud<pcl::PointXYZRGB>::Ptr frame_cloud(
             new pcl::PointCloud<pcl::PointXYZRGB>);
 
-        holeDetector(imgColor_, imgDepth_, camInfo_, frame_holes);
-        imageToPointCloud(imgColor_, imgDepth_, camInfo_, frame_cloud);
+        // 目标对齐分辨率：使用深度相机的原生分辨率（例如848x480）以保证最佳法向精度
+        cv::Size targetSize(848, 480);
+        cv::Mat resizedColor, resizedDepth;
+
+        // 如果原始图不是848x480（驱动对齐后的可能是1280x720），则统一缩放到480p进行计算
+        if (imgColor_.size() != targetSize) {
+          cv::resize(imgColor_, resizedColor, targetSize);
+        } else {
+          resizedColor = imgColor_;
+        }
+
+        if (imgDepth_.size() != targetSize) {
+          cv::resize(imgDepth_, resizedDepth, targetSize, 0, 0,
+                     cv::INTER_NEAREST);
+        } else {
+          resizedDepth = imgDepth_;
+        }
+
+        // 缩放内参以匹配 848x480 分辨率
+        sensor_msgs::msg::CameraInfo scaled_info = camInfo_;
+        if (scaled_info.width != (uint32_t)targetSize.width ||
+            scaled_info.height != (uint32_t)targetSize.height) {
+          double sw = (double)targetSize.width / scaled_info.width;
+          double sh = (double)targetSize.height / scaled_info.height;
+          scaled_info.k[0] *= sw;
+          scaled_info.k[2] *= sw;
+          scaled_info.k[4] *= sh;
+          scaled_info.k[5] *= sh;
+          scaled_info.width = targetSize.width;
+          scaled_info.height = targetSize.height;
+        }
+
+        holeDetector(resizedColor, resizedDepth, scaled_info, frame_holes);
+        imageToPointCloud(resizedColor, resizedDepth, scaled_info, frame_cloud);
 
         // 累积数据
         if (frame_cloud->points.size() > 1000) { // 确保有足够的点
@@ -739,6 +771,11 @@ private:
       *cloud_ = *accumulated_cloud;
       *cloud_holes_ = *accumulated_holes;
 
+      // 为保证对齐，确保最后的 imgColor_ 也是对齐到深度尺寸的（供后面发布使用）
+      if (!imgColor_.empty() && imgColor_.size() != imgDepth_.size()) {
+        cv::resize(imgColor_, imgColor_, imgDepth_.size());
+      }
+
       RCLCPP_INFO(this->get_logger(),
                   "Multi-frame accumulation complete: %zu points, %zu holes",
                   cloud_->points.size(), cloud_holes_->size());
@@ -759,9 +796,35 @@ private:
                    "to single frame",
                    accumulated_cloud->points.size());
 
-      // 回退到单帧处理
-      holeDetector(imgColor_, imgDepth_, camInfo_, cloud_holes_);
-      imageToPointCloud(imgColor_, imgDepth_, camInfo_, cloud_);
+      // 同样处理单帧回退逻辑，确保输出图像尺寸一致
+      cv::Size targetSize(848, 480);
+      if (!imgColor_.empty() && imgColor_.size() != targetSize) {
+        cv::resize(imgColor_, imgColor_, targetSize);
+      }
+      if (!imgDepth_.empty() && imgDepth_.size() != targetSize) {
+        cv::resize(imgDepth_, imgDepth_, targetSize, 0, 0, cv::INTER_NEAREST);
+      }
+
+      // 更新camInfo以匹配缩放后的图像（如果需要）
+      // 假设订阅的是depth_camera_info且depth是848x480，而imgDepth_也是848x480，则无需缩放。
+      // 但为了鲁棒性，我们根据imgDepth的实际尺寸缩放相参。
+      sensor_msgs::msg::CameraInfo scaled_info = camInfo_;
+      if (scaled_info.width != (uint32_t)imgDepth_.cols ||
+          scaled_info.height != (uint32_t)imgDepth_.rows) {
+        double sw = (double)imgDepth_.cols / scaled_info.width;
+        double sh = (double)imgDepth_.rows / scaled_info.height;
+        scaled_info.k[0] *= sw;
+        scaled_info.k[2] *= sw;
+        scaled_info.k[4] *= sh;
+        scaled_info.k[5] *= sh;
+        scaled_info.width = imgDepth_.cols;
+        scaled_info.height = imgDepth_.rows;
+      }
+
+      // 探测孔洞
+      holeDetector(imgColor_, imgDepth_, scaled_info, cloud_holes_);
+      // 生成点云
+      imageToPointCloud(imgColor_, imgDepth_, scaled_info, cloud_);
       normCalc(cloud_holes_, cloud_, cloud_downSampled_, cloud_filtered_,
                cloud_smoothed_, cloud_normals_, cloud_with_normals_,
                cloud_shrink_, cloud_tarPoint_, triangles_, tarPointList_,
@@ -1032,8 +1095,30 @@ bool NormCalcServer::enhanceRegionWithMultiFrame(
       pcl::PointCloud<pcl::PointXYZRGB>::Ptr frame_cloud(
           new pcl::PointCloud<pcl::PointXYZRGB>);
 
-      holeDetector(imgColor_, imgDepth_, camInfo_, frame_holes);
-      imageToPointCloud(imgColor_, imgDepth_, camInfo_, frame_cloud);
+      // 为保证对齐，确保RGB尺寸匹配深度
+      cv::Mat resizedColor;
+      if (imgColor_.size() != imgDepth_.size()) {
+        cv::resize(imgColor_, resizedColor, imgDepth_.size());
+      } else {
+        resizedColor = imgColor_;
+      }
+
+      // 缩放内参以匹配深度图像分辨率
+      sensor_msgs::msg::CameraInfo scaled_info = camInfo_;
+      if (scaled_info.width != (uint32_t)imgDepth_.cols ||
+          scaled_info.height != (uint32_t)imgDepth_.rows) {
+        double sw = (double)imgDepth_.cols / scaled_info.width;
+        double sh = (double)imgDepth_.rows / scaled_info.height;
+        scaled_info.k[0] *= sw;
+        scaled_info.k[2] *= sw;
+        scaled_info.k[4] *= sh;
+        scaled_info.k[5] *= sh;
+        scaled_info.width = imgDepth_.cols;
+        scaled_info.height = imgDepth_.rows;
+      }
+
+      holeDetector(resizedColor, imgDepth_, scaled_info, frame_holes);
+      imageToPointCloud(resizedColor, imgDepth_, scaled_info, frame_cloud);
 
       // 过滤出目标区域的点云
       pcl::PointCloud<pcl::PointXYZRGB>::Ptr region_cloud(

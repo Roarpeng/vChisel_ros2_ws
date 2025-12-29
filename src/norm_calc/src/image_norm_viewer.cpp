@@ -25,17 +25,36 @@ public:
         "visual_norm_result", 10,
         std::bind(&ImageNormViewerNode::poseCallback, this, _1));
 
-    // Subscription to camera info for projection (using aligned info to match
-    // color frame)
+    // Subscription to camera info for projection (using depth info as
+    // calculation reference)
     cam_info_sub_ = this->create_subscription<sensor_msgs::msg::CameraInfo>(
-        "camera/camera/aligned_depth_to_color/camera_info", 10,
+        "camera/camera/depth/camera_info", 10,
         std::bind(&ImageNormViewerNode::cameraInfoCallback, this, _1));
 
     window_name_ = "Norm Calculation Result";
     cv::namedWindow(window_name_, cv::WINDOW_AUTOSIZE);
     cv::startWindowThread();
 
-    RCLCPP_INFO(this->get_logger(), "Result-only Viewer initialized.");
+    // Grid Parameters
+    this->declare_parameter("BOX_LEN", 0.05);
+    this->declare_parameter("BOX_ROW", 4);
+    this->declare_parameter("BOX_COLUMN", 6);
+    this->declare_parameter("XMIN", -0.15);
+    this->declare_parameter("YMIN", -0.1);
+    this->declare_parameter("ZMIN", 0.2);
+    this->declare_parameter("ZMAX", 0.6);
+
+    box_len_ = this->get_parameter("BOX_LEN").as_double();
+    box_row_ = this->get_parameter("BOX_ROW").as_int();
+    box_column_ = this->get_parameter("BOX_COLUMN").as_int();
+    xmin_ = this->get_parameter("XMIN").as_double();
+    ymin_ = this->get_parameter("YMIN").as_double();
+    zmin_ = this->get_parameter("ZMIN").as_double();
+    zmax_ = this->get_parameter("ZMAX").as_double();
+
+    RCLCPP_INFO(this->get_logger(),
+                "Result-only Viewer initialized with grid: %dx%d (cell: %.3fm)",
+                box_row_, box_column_, box_len_);
   }
 
   ~ImageNormViewerNode() { cv::destroyAllWindows(); }
@@ -51,6 +70,13 @@ private:
   std::mutex data_mutex_;
   bool camera_info_received_ = false;
   std::string window_name_;
+
+  // Grid config
+  double box_len_;
+  int box_row_;
+  int box_column_;
+  double xmin_, ymin_;
+  double zmin_, zmax_;
 
   void
   capturedImageCallback(const sensor_msgs::msg::Image::ConstSharedPtr msg) {
@@ -125,6 +151,11 @@ private:
     int rows = display_mat.rows;
     std::vector<cv::Point> all_visual_points;
 
+    // Draw Grid first
+    if (camera_info_received_) {
+      drawGrid(display_mat, cols, rows, all_visual_points);
+    }
+
     if (latest_poses_.empty()) {
       RCLCPP_WARN(this->get_logger(),
                   "updateDisplay called but latest_poses_ is empty.");
@@ -198,6 +229,52 @@ private:
 
     cv::imshow(window_name_, display_mat);
     cv::waitKey(1);
+  }
+
+  void drawGrid(cv::Mat &img, int cols, int rows,
+                std::vector<cv::Point> &points_for_roi) {
+    cv::Scalar grid_color(100, 100, 100); // Gray
+    int grid_thickness = 1;
+
+    // Estimate a representative Z for the grid (using average or min Z)
+    double draw_z = zmin_ + 0.1; // Offset slightly from min Z for visibility
+    if (!latest_poses_.empty()) {
+      draw_z = 0;
+      int count = 0;
+      for (const auto &p : latest_poses_) {
+        draw_z += p.position.z;
+        count++;
+      }
+      draw_z /= count;
+    }
+
+    // Draw Vertical Lines (X constant)
+    for (int j = 0; j <= box_column_; ++j) {
+      double x = xmin_ + j * box_len_;
+      cv::Point p1 = project3DTo2D(x, ymin_, draw_z, cols, rows);
+      cv::Point p2 =
+          project3DTo2D(x, ymin_ + box_row_ * box_len_, draw_z, cols, rows);
+
+      if (p1.x != -1 && p2.x != -1) {
+        cv::line(img, p1, p2, grid_color, grid_thickness);
+        points_for_roi.push_back(p1);
+        points_for_roi.push_back(p2);
+      }
+    }
+
+    // Draw Horizontal Lines (Y constant)
+    for (int i = 0; i <= box_row_; ++i) {
+      double y = ymin_ + i * box_len_;
+      cv::Point p1 = project3DTo2D(xmin_, y, draw_z, cols, rows);
+      cv::Point p2 =
+          project3DTo2D(xmin_ + box_column_ * box_len_, y, draw_z, cols, rows);
+
+      if (p1.x != -1 && p2.x != -1) {
+        cv::line(img, p1, p2, grid_color, grid_thickness);
+        points_for_roi.push_back(p1);
+        points_for_roi.push_back(p2);
+      }
+    }
   }
 };
 
