@@ -151,9 +151,21 @@ private:
     int rows = display_mat.rows;
     std::vector<cv::Point> all_visual_points;
 
-    // Draw Grid first
+    // Draw Grid first and get grid-specific points for ROI
+    std::vector<cv::Point> grid_points;
     if (camera_info_received_) {
-      drawGrid(display_mat, cols, rows, all_visual_points);
+      drawGrid(display_mat, cols, rows, grid_points);
+    }
+
+    // Also include normal points in ROI calculation to ensure they are visible
+    std::vector<cv::Point> all_roi_points = grid_points;
+    for (const auto &p : latest_poses_) {
+      cv::Point center =
+          project3DTo2D(p.position.x, p.position.y, p.position.z, cols, rows);
+      if (center.x >= 0 && center.x < cols && center.y >= 0 &&
+          center.y < rows) {
+        all_roi_points.push_back(center);
+      }
     }
 
     if (latest_poses_.empty()) {
@@ -161,56 +173,45 @@ private:
                   "updateDisplay called but latest_poses_ is empty.");
     }
 
+    // Draw elements
     for (size_t i = 0; i < latest_poses_.size(); ++i) {
       const auto &p = latest_poses_[i];
-
-      // Project 3D center
       cv::Point center =
           project3DTo2D(p.position.x, p.position.y, p.position.z, cols, rows);
 
       if (center.x >= 0 && center.x < cols && center.y >= 0 &&
           center.y < rows) {
-        all_visual_points.push_back(center);
-
         // Draw normal point (larger circle)
         cv::circle(display_mat, center, 8, cv::Scalar(0, 255, 0), -1);
 
-        // Project 3D vector end point for proper perspective (e.g. 5cm length)
-        double vector_len = 0.05;
-        cv::Point end = project3DTo2D(
-            p.position.x + p.orientation.x * vector_len,
-            p.position.y + p.orientation.y * vector_len,
-            p.position.z + p.orientation.z * vector_len, cols, rows);
+        // Use 2.5D visualization: project the tilt vector directly onto pixels
+        // to avoid perspective expansion of parallel normals.
+        float arrow_scale = 60.0f;
+        cv::Point end(center.x + p.orientation.x * arrow_scale,
+                      center.y + p.orientation.y * arrow_scale);
 
-        if (end.x >= 0 && end.x < cols && end.y >= 0 && end.y < rows) {
-          all_visual_points.push_back(end);
+        if (std::abs(p.orientation.x) > 0.005 ||
+            std::abs(p.orientation.y) > 0.005) {
           cv::arrowedLine(display_mat, center, end, cv::Scalar(0, 0, 255), 3, 8,
                           0, 0.3);
         } else {
-          // 2D fallback if 3D projection of vector end is outside
-          cv::line(display_mat, center,
-                   cv::Point(center.x + p.orientation.x * 30,
-                             center.y + p.orientation.y * 30),
-                   cv::Scalar(0, 0, 255), 3);
+          // Almost perfectly perpendicular: just draw a dot
+          cv::circle(display_mat, center, 4, cv::Scalar(0, 0, 255), -1);
         }
 
-        // Draw label
         cv::putText(display_mat, std::to_string(i),
                     cv::Point(center.x + 10, center.y - 10),
                     cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(255, 255, 0), 2);
-      } else {
-        if (i < 5) {
-          RCLCPP_WARN(this->get_logger(),
-                      "Point %zu out of bounds: 3D(%f, %f, %f) -> 2D(%d, %d)",
-                      i, p.position.x, p.position.y, p.position.z, center.x,
-                      center.y);
-        }
       }
     }
 
-    if (!all_visual_points.empty()) {
-      cv::Rect roi = cv::boundingRect(all_visual_points);
-      int padding = 150;
+    if (!grid_points.empty()) {
+      // User requested scale to grid size (30x20cm).
+      // We use grid corners to define the core ROI.
+      cv::Rect roi = cv::boundingRect(all_roi_points);
+
+      // Tighten padding to maximize grid visibility
+      int padding = 80;
       roi.x = std::max(0, roi.x - padding);
       roi.y = std::max(0, roi.y - padding);
       roi.width = std::min(cols - roi.x, roi.width + 2 * padding);
@@ -221,7 +222,7 @@ private:
       }
     } else if (!latest_poses_.empty()) {
       RCLCPP_ERROR(this->get_logger(),
-                   "No points could be projected onto the image!");
+                   "No grid or points could be projected onto the image!");
     }
 
     cv::putText(display_mat, "Norm Result Area (ROI)", cv::Point(20, 40),

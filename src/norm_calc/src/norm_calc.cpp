@@ -16,7 +16,8 @@ bool normCalc(pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_holes,
               pcl::PolygonMesh::Ptr triangles,
               chisel_box::ChiselNormPoint *tarPointList,
               chisel_box::ChiselParam chiselParam,
-              edge_grid::GridParam gridParam) {
+              edge_grid::GridParam gridParam,
+              const std::vector<chisel_box::ChiselNormPoint> &history_points) {
 
   cout << "input cloud: " << cloud->points.size() << endl;
 
@@ -53,7 +54,7 @@ bool normCalc(pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_holes,
   pass.filter(*cloud_filtered);
 
   pass.setInputCloud(cloud_filtered); // 设置输入点云
-  pass.setFilterFieldName("y"); // 设置过滤时所需要点云类型的y字段
+  pass.setFilterFieldName("y");       // 设置过滤时所需要点云类型的y字段
   pass.setFilterLimits(chiselParam.YMIN - chiselParam.BORDER_WIDTH,
                        chiselParam.YMAX +
                            chiselParam.BORDER_WIDTH); // 设置在过滤字段的范围
@@ -61,7 +62,7 @@ bool normCalc(pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_holes,
   pass.filter(*cloud_filtered);
 
   pass.setInputCloud(cloud_filtered); // 设置输入点云
-  pass.setFilterFieldName("x"); // 设置过滤时所需要点云类型的x字段
+  pass.setFilterFieldName("x");       // 设置过滤时所需要点云类型的x字段
   pass.setFilterLimits(chiselParam.XMIN - chiselParam.BORDER_WIDTH,
                        chiselParam.XMAX +
                            chiselParam.BORDER_WIDTH); // 设置在过滤字段的范围
@@ -72,7 +73,7 @@ bool normCalc(pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_holes,
 
   // ********下采样start********
   pcl::VoxelGrid<pcl::PointXYZRGB> downSampled; // 创建滤波对象
-  downSampled.setInputCloud(cloud_filtered); // 设置需要过滤的点云给滤波对象
+  downSampled.setInputCloud(cloud_filtered);    // 设置需要过滤的点云给滤波对象
   downSampled.setLeafSize(0.0025f, 0.0025f,
                           0.0025f); // 设置滤波时创建的体素体积为5mm的立方体
   downSampled.filter(*cloud_downSampled); // 执行滤波处理，存储输出
@@ -190,20 +191,20 @@ bool normCalc(pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_holes,
   // holes process
   pcl::PassThrough<pcl::PointXYZ> holePass;
   holePass.setInputCloud(cloud_holes); // 设置输入点云
-  holePass.setFilterFieldName("z"); // 设置过滤时所需要点云类型的Z字段
+  holePass.setFilterFieldName("z");    // 设置过滤时所需要点云类型的Z字段
   holePass.setFilterLimits(chiselParam.ZMIN,
                            chiselParam.ZMAX); // 设置在过滤字段的范围
   holePass.filter(*cloud_holes);
 
   holePass.setInputCloud(cloud_holes); // 设置输入点云
-  holePass.setFilterFieldName("y"); // 设置过滤时所需要点云类型的y字段
+  holePass.setFilterFieldName("y");    // 设置过滤时所需要点云类型的y字段
   holePass.setFilterLimits(
       chiselParam.YMIN - chiselParam.BORDER_WIDTH,
       chiselParam.YMAX + chiselParam.BORDER_WIDTH); // 设置在过滤字段的范围
   holePass.filter(*cloud_holes);
 
   holePass.setInputCloud(cloud_holes); // 设置输入点云
-  holePass.setFilterFieldName("x"); // 设置过滤时所需要点云类型的x字段
+  holePass.setFilterFieldName("x");    // 设置过滤时所需要点云类型的x字段
   holePass.setFilterLimits(
       chiselParam.XMIN - chiselParam.BORDER_WIDTH,
       chiselParam.XMAX + chiselParam.BORDER_WIDTH); // 设置在过滤字段的范围
@@ -357,6 +358,8 @@ bool normCalc(pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_holes,
 // ********边缘凿击点筛选end********
 #else
 
+#include <random>
+
   // ********凿击点筛选start********
   chisel_box::ChiselBox *chiselTable[4][6];
   for (size_t i = 0; i < 4; i++) {
@@ -376,23 +379,8 @@ bool normCalc(pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_holes,
     fRow = (cloud_shrink->points[i].y - chiselParam.YMIN) / chiselParam.BOX_LEN;
     fCol = (cloud_shrink->points[i].x - chiselParam.XMIN) / chiselParam.BOX_LEN;
 
-    if (-0.3f <= fRow && fRow <= 0.0f) {
-      indRow = 0;
-    } else if (chiselParam.BOX_ROW <= fRow &&
-               fRow <= 0.3f + chiselParam.BOX_ROW) {
-      indRow = chiselParam.BOX_ROW - 1;
-    } else {
-      indRow = floor(fRow);
-    }
-
-    if (-0.3f <= fCol && fCol <= 0.0f) {
-      indColumn = 0;
-    } else if (chiselParam.BOX_COLUMN <= fCol &&
-               fCol <= 0.3f + chiselParam.BOX_COLUMN) {
-      indColumn = chiselParam.BOX_COLUMN - 1;
-    } else {
-      indColumn = floor(fCol);
-    }
+    indRow = floor(fRow);
+    indColumn = floor(fCol);
 
     if (0 <= indRow && indRow < chiselParam.BOX_ROW && 0 <= indColumn &&
         indColumn < chiselParam.BOX_COLUMN) {
@@ -406,16 +394,57 @@ bool normCalc(pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_holes,
       }
     }
   }
+
+  std::mt19937 gen(1337); // Seeded for consistency
+  std::uniform_real_distribution<float> dis(-0.005f, 0.005f);
+
   for (indRow = 0; indRow < chiselParam.BOX_ROW; indRow++) // 凿击区域法向点票选
   {
     for (indColumn = 0; indColumn < chiselParam.BOX_COLUMN; indColumn++) {
-      cout << indRow << "," << indColumn << ": "
-           << chiselTable[indRow][indColumn]->getPointNum() << endl;
       chiselTable[indRow][indColumn]->voteTarPoint(
           cloud_shrink, cloud_holes, indRow, indColumn, tarPointList);
+
       if (chiselTable[indRow][indColumn]->getTarStatus()) {
-        chiselTable[indRow][indColumn]->getTarPoint(
-            tarPointList[indRow * chiselParam.BOX_COLUMN + indColumn]);
+        chisel_box::ChiselNormPoint best;
+        chiselTable[indRow][indColumn]->getTarPoint(best);
+
+        bool violated = false;
+        float min_dist_sq = chiselParam.MIN_DISTANCE_THRESHOLD *
+                            chiselParam.MIN_DISTANCE_THRESHOLD;
+
+        // Check distance against current shot neighbors
+        for (int k = 0; k < indRow * chiselParam.BOX_COLUMN + indColumn; ++k) {
+          if (tarPointList[k].status) {
+            float dx = best.ox - tarPointList[k].ox;
+            float dy = best.oy - tarPointList[k].oy;
+            if (dx * dx + dy * dy < min_dist_sq) {
+              violated = true;
+              break;
+            }
+          }
+        }
+
+        // Check distance against history (previous shots)
+        if (!violated) {
+          for (const auto &hp : history_points) {
+            float dx = best.ox - hp.ox;
+            float dy = best.oy - hp.oy;
+            if (dx * dx + dy * dy < min_dist_sq) {
+              violated = true;
+              break;
+            }
+          }
+        }
+
+        // Apply random offset if violated
+        if (violated) {
+          best.ox += dis(gen);
+          best.oy += dis(gen);
+          cout << "Spacing violation detected! Applied random offset to grid ["
+               << indRow << "," << indColumn << "]" << endl;
+        }
+
+        tarPointList[indRow * chiselParam.BOX_COLUMN + indColumn] = best;
       }
     }
   }

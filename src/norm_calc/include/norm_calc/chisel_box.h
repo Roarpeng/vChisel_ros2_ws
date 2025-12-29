@@ -52,12 +52,13 @@ typedef struct {
   float
       BORDER_WIDTH; // 可凿击区域外延伸的边界宽度，用于更好计算可凿击边界法向量
   float NORM_TH;    // 可凿击法向量z阈值 acos(0.9) = 25.8degree
-  float AFFECT_RADIUS; // 凿击影响区域半径平方，0.03*0.03
-  float HEIGHT_WEIGHT; // 选取凿击法向量投票函数中高度的权重
-  float CURV_WEIGHT;   // 选取凿击法向量投票函数中曲率的权重
-  float ANGLE_WEIGHT;  // 选取凿击法向量投票函数中jiaodu的权重
-  float SEARCH_RADIUS; // 邻域统计半径
-  int SEARCH_NUM_TH;   // 邻域统计数量阈值
+  float AFFECT_RADIUS;          // 凿击影响区域半径平方，0.03*0.03
+  float HEIGHT_WEIGHT;          // 选取凿击法向量投票函数中高度的权重
+  float CURV_WEIGHT;            // 选取凿击法向量投票函数中曲率的权重
+  float ANGLE_WEIGHT;           // 选取凿击法向量投票函数中jiaodu的权重
+  float SEARCH_RADIUS;          // 邻域统计半径
+  int SEARCH_NUM_TH;            // 邻域统计数量阈值
+  float MIN_DISTANCE_THRESHOLD; // 点位避让阈值
 } ChiselParam;
 
 /* 凿击区域类 */

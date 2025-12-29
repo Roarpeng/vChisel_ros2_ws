@@ -55,20 +55,17 @@ public:
     this->declare_parameter<int>("TH_HALF", 50);
     this->declare_parameter<int>("TH_FULL", 100);
     this->declare_parameter<double>("TH_ANGLE", 0.99);
+    this->declare_parameter<double>("MIN_DISTANCE_THRESHOLD", 0.03);
 
     // initialize params into structs
     srand((unsigned)time(NULL));
     inChiselParam.BOX_LEN = this->get_parameter("BOX_LEN").as_double();
-    double randX = ((double)rand() / RAND_MAX - 0.5) * inChiselParam.BOX_LEN *
-                   3.0; // 增大3倍随机偏移
-    double randY = ((double)rand() / RAND_MAX - 0.5) * inChiselParam.BOX_LEN *
-                   3.0; // 增大3倍随机偏移
     inChiselParam.BOX_ROW = this->get_parameter("BOX_ROW").as_int();
     inChiselParam.BOX_COLUMN = this->get_parameter("BOX_COLUMN").as_int();
-    inChiselParam.XMIN = this->get_parameter("XMIN").as_double() + randX;
-    inChiselParam.XMAX = this->get_parameter("XMAX").as_double() + randX;
-    inChiselParam.YMIN = this->get_parameter("YMIN").as_double() + randY;
-    inChiselParam.YMAX = this->get_parameter("YMAX").as_double() + randY;
+    inChiselParam.XMIN = this->get_parameter("XMIN").as_double();
+    inChiselParam.XMAX = this->get_parameter("XMAX").as_double();
+    inChiselParam.YMIN = this->get_parameter("YMIN").as_double();
+    inChiselParam.YMAX = this->get_parameter("YMAX").as_double();
     inChiselParam.ZMIN = this->get_parameter("ZMIN").as_double();
     inChiselParam.ZMAX = this->get_parameter("ZMAX").as_double();
     inChiselParam.BORDER_WIDTH =
@@ -99,10 +96,14 @@ public:
     inGridParam.THHALF = this->get_parameter("TH_HALF").as_int();
     inGridParam.THFULL = this->get_parameter("TH_FULL").as_int();
     inGridParam.THANGLE = this->get_parameter("TH_ANGLE").as_double();
+    inChiselParam.MIN_DISTANCE_THRESHOLD =
+        this->get_parameter("MIN_DISTANCE_THRESHOLD").as_double();
+    min_spacing_threshold_ = inChiselParam.MIN_DISTANCE_THRESHOLD;
 
-    RCLCPP_INFO(this->get_logger(), "randX = %6f", randX);
+    RCLCPP_INFO(this->get_logger(), "Grid initialized at nominal bounds:");
     RCLCPP_INFO(this->get_logger(), "BOX_LEN = %6f", inChiselParam.BOX_LEN);
-    RCLCPP_INFO(this->get_logger(), "randY = %6f", randY);
+    RCLCPP_INFO(this->get_logger(), "XMIN = %6f, YMIN = %6f",
+                inChiselParam.XMIN, inChiselParam.YMIN);
 
     pubSmoothedData = this->create_publisher<sensor_msgs::msg::PointCloud2>(
         "smoothedData", 1);
@@ -200,6 +201,8 @@ private:
       new pcl::PointCloud<pcl::PointXYZRGBNormal>};
   pcl::PolygonMesh::Ptr triangles_{new pcl::PolygonMesh};
   chisel_box::ChiselNormPoint tarPointList_[24];
+  std::vector<chisel_box::ChiselNormPoint> history_points_;
+  double min_spacing_threshold_ = 0.03;
 
   geometry_msgs::msg::Pose tempPose_;
   uint32_t frameNum_ = 0, depthNum_ = 0, camInfoNum_ = 0, imgNum_ = 0;
@@ -784,9 +787,19 @@ private:
       if (normCalc(cloud_holes_, accumulated_cloud, cloud_downSampled_,
                    cloud_filtered_, cloud_smoothed_, cloud_normals_,
                    cloud_with_normals_, cloud_shrink_, cloud_tarPoint_,
-                   triangles_, tarPointList_, inChiselParam, inGridParam)) {
+                   triangles_, tarPointList_, inChiselParam, inGridParam,
+                   history_points_)) {
         RCLCPP_INFO(this->get_logger(), "norm calc done, tarPoint size=%zu",
                     cloud_tarPoint_->points.size());
+
+        // Update history for next shot
+        history_points_.clear();
+        for (int i = 0; i < inChiselParam.BOX_ROW * inChiselParam.BOX_COLUMN;
+             ++i) {
+          if (tarPointList_[i].status) {
+            history_points_.push_back(tarPointList_[i]);
+          }
+        }
       } else {
         RCLCPP_ERROR(this->get_logger(), "norm calc failed!");
       }
@@ -825,10 +838,20 @@ private:
       holeDetector(imgColor_, imgDepth_, scaled_info, cloud_holes_);
       // 生成点云
       imageToPointCloud(imgColor_, imgDepth_, scaled_info, cloud_);
-      normCalc(cloud_holes_, cloud_, cloud_downSampled_, cloud_filtered_,
-               cloud_smoothed_, cloud_normals_, cloud_with_normals_,
-               cloud_shrink_, cloud_tarPoint_, triangles_, tarPointList_,
-               inChiselParam, inGridParam);
+      if (normCalc(cloud_holes_, cloud_, cloud_downSampled_, cloud_filtered_,
+                   cloud_smoothed_, cloud_normals_, cloud_with_normals_,
+                   cloud_shrink_, cloud_tarPoint_, triangles_, tarPointList_,
+                   inChiselParam, inGridParam, history_points_)) {
+
+        // Update history for next shot
+        history_points_.clear();
+        for (int i = 0; i < inChiselParam.BOX_ROW * inChiselParam.BOX_COLUMN;
+             ++i) {
+          if (tarPointList_[i].status) {
+            history_points_.push_back(tarPointList_[i]);
+          }
+        }
+      }
     }
 
 #ifdef Cam2Tool_TF
