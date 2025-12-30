@@ -36,7 +36,7 @@ class PLCClientNode(Node):
         super().__init__('plc_client_node')
 
         # Parameters (could be remapped via launch)
-        self.declare_parameter('plc_address', '192.168.50.225')
+        self.declare_parameter('plc_address', '10.77.78.225')
         self.declare_parameter('plc_rack', 0)
         self.declare_parameter('plc_slot', 1)
         self.declare_parameter('db_number', 2120)  # Updated to match the working test script

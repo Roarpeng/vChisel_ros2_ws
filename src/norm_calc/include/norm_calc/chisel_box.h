@@ -1,99 +1,81 @@
 #ifndef CHISEL_BOX_H
 #define CHISEL_BOX_H
 
-#include <cmath> // Include cmath for abs() function
+#include <cmath>
+#include <memory>
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
 #include <vector>
 
-// #define MULTI_FRAME           // 多帧融合开关
-#define USING_STATIS // 统计滤波开关
-// #define USING_SMOOTH          // 平滑开关
-// #define AVOID_RIM             // 避开边缘开关
-
-#define NORM_NUM_MAX 10000 // 每个凿击区块存储法向量上限
-// #define BOX_LEN       0.05f    // 每个正方形凿击区块边长
-// #define BOX_ROW       4       // 凿击区块行数
-// #define BOX_COLUMN    6       // 凿击区块列树
-// #define XMIN          -0.15f   // 实际可凿击区域边界位置
-// #define XMAX          0.15f
-// #define YMIN          -0.1f
-// #define YMAX          0.1f
-// #define ZMIN          0.2f
-// #define ZMAX          0.6f
-// #define BORDER_WIDTH  0.02f   //
-// 可凿击区域外延伸的边界宽度，用于更好计算可凿击边界法向量 #define NORM_TH 0.9f
-// // 可凿击法向量z阈值 acos(0.9) = 25.8degree #define AFFECT_RADIUS 0.0009f //
-// 凿击影响区域半径平方，0.03*0.03 #define HEIGHT_WEIGHT 3.0f    //
-// 选取凿击法向量投票函数中高度的权重 #define CURV_WEIGHT   2.0f   //
-// 选取凿击法向量投票函数中曲率的权重 #define ANGLE_WEIGHT  1.0f   //
-// 选取凿击法向量投票函数中jiaodu的权重 #define SEARCH_RADIUS 0.03f   //
-// 邻域统计半径 #define SEARCH_NUM_TH 100     // 邻域统计数量阈值
-
 namespace chisel_box {
-/*自定义凿击点法向量结构体*/
-typedef struct {
-  bool status;      // 状态：true = 激活
-  float ox, oy, oz; // 凿击点坐标
-  float nx, ny, nz; // 凿击法向
-  float curv;       // 凿击点曲率
-} ChiselNormPoint;
 
+// 状态机定义
+enum BoxState {
+  STATE_PENDING = 0,  // 初始状态：待处理
+  STATE_SKIPPED_ONCE, // 中间状态：上次没找到，跳过一次
+  STATE_COMPLETED,    // 终态：已规划/已完成
+  STATE_UNREACHABLE   // 终态：无法作业（两次都找不到）
+};
+
+// 参数聚合
 typedef struct {
-  float BOX_LEN;  // 每个正方形凿击区块边长
-  int BOX_ROW;    // 凿击区块行数
-  int BOX_COLUMN; // 凿击区块列树
-  float XMIN;     // 实际可凿击区域边界位置
-  float XMAX;
-  float YMIN;
-  float YMAX;
-  float ZMIN;
-  float ZMAX;
-  float
-      BORDER_WIDTH; // 可凿击区域外延伸的边界宽度，用于更好计算可凿击边界法向量
-  float NORM_TH;    // 可凿击法向量z阈值 acos(0.9) = 25.8degree
-  float AFFECT_RADIUS;          // 凿击影响区域半径平方，0.03*0.03
-  float HEIGHT_WEIGHT;          // 选取凿击法向量投票函数中高度的权重
-  float CURV_WEIGHT;            // 选取凿击法向量投票函数中曲率的权重
-  float ANGLE_WEIGHT;           // 选取凿击法向量投票函数中jiaodu的权重
-  float SEARCH_RADIUS;          // 邻域统计半径
-  int SEARCH_NUM_TH;            // 邻域统计数量阈值
-  float MIN_DISTANCE_THRESHOLD; // 点位避让阈值
+  float BOX_LEN;
+  int BOX_ROW;      // [修复] 新增
+  int BOX_COLUMN;   // [修复] 新增
+  float XMIN, XMAX; // [修复] 补全 XMAX
+  float YMIN, YMAX; // [修复] 补全 YMAX
+
+  float STRICT_NORM_TH;
+  float STRICT_HOLE_DIST;
+  float STRICT_CURV_TH;
+
+  float RELAXED_NORM_TH;
+  float RELAXED_HOLE_DIST;
+  float RELAXED_CURV_TH;
+
+  float HEIGHT_WEIGHT;
+  float CURV_WEIGHT;
+  float ANGLE_WEIGHT;
+  float CENTER_WEIGHT;
+
+  // [新增] 凸起策略参数
+  float PROTRUSION_TH;   // 判定为凸起的高度差阈值
+  float TIP_CROP_RATIO;  // 切顶比例
+  float BASE_CROP_RATIO; // 切底比例
 } ChiselParam;
 
-/* 凿击区域类 */
 class ChiselBox {
 public:
-  ChiselBox(size_t boxColumn, float affectRadius, float heightWeight,
-            float curvWeight, float angleWeight, float normTH);
-  ChiselBox(const ChiselBox &obj);
+  ChiselBox(int row, int col, ChiselParam param);
   ~ChiselBox();
-  bool reset(void);
-  bool addPointInd(size_t index);
-  bool voteTarPoint(pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud,
-                    pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_holes, size_t row,
-                    size_t column, ChiselNormPoint *tarPointList);
-  bool getTarStatus();
-  bool getTarPoint(ChiselNormPoint &tarPoint);
-  size_t getPointNum();
+
+  // 重置为 PENDING
+  void reset();
+
+  // 强制标记为完成
+  void markCompleted();
+
+  // 获取当前状态
+  BoxState getState() const { return state_; }
+  int getRow() const { return row_; }
+  int getCol() const { return col_; }
+
+  // 核心接口：在 ROI 点云中寻找最佳点
+  bool findBestPoint(pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud_roi,
+                     pcl::PointCloud<pcl::PointXYZ>::Ptr obstacles,
+                     pcl::PointXYZRGBNormal &out_point);
 
 private:
-  bool isTarExist;
-  size_t num;
-  size_t indexList[NORM_NUM_MAX];
-  ChiselNormPoint bestPoint;
-  size_t bestIndex;
-  size_t indexRow;
-  size_t indexColumn;
-  float bestScore;
+  int row_, col_;
+  ChiselParam param_;
+  BoxState state_;
 
-  size_t inBoxColumn;
-  float inAffectRadius;
-  float inHeightWeight;
-  float inCurvWeight;
-  float inAngleWeight;
-  float inNormTH;
+  // 内部通用搜索逻辑
+  bool searchWithCriteria(pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud,
+                          pcl::PointCloud<pcl::PointXYZ>::Ptr obstacles,
+                          float norm_th, float hole_dist_th, float curv_th,
+                          pcl::PointXYZRGBNormal &result);
 };
 
 } // namespace chisel_box
-#endif /* CHISEL_BOX_H */
+#endif
