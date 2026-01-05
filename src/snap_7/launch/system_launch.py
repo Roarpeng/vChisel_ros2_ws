@@ -17,7 +17,7 @@ def generate_launch_description():
     # 启动norm_calc服务节点
     norm_calc_node = Node(
         package='norm_calc',
-        executable='norm_calc_node',
+        executable='norm_calc_server',
         name='norm_calc',
         output='screen',
         parameters=[params_file]
@@ -43,7 +43,7 @@ def generate_launch_description():
     # 启动相机监控节点（工业级可靠性增强）
     camera_monitor_node = Node(
         package='snap_7',
-        executable='camera_monitor.py',
+        executable='camera_monitor',
         name='camera_monitor',
         output='screen',
         parameters=[
@@ -56,7 +56,7 @@ def generate_launch_description():
     # 启动图像和法向信息联合可视化节点（新增）- 这是您需要的主要功能
     image_norm_viewer_node = Node(
         package='norm_calc',
-        executable='image_norm_viewer_node',
+        executable='image_norm_viewer',
         name='image_norm_viewer',
         output='screen',
         parameters=[

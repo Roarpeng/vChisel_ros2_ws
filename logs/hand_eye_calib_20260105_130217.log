@@ -1,0 +1,63 @@
+[INFO] [1767589337.907625958] [camera.camera]: RealSense ROS v4.56.4
+[INFO] [1767589337.907826918] [camera.camera]: Built with LibRealSense v2.56.4
+[INFO] [1767589337.907858198] [camera.camera]: Running with LibRealSense v2.56.4
+[INFO] [1767589337.926333200] [camera.camera]: Device with serial number 213622073684 was found.
+
+[INFO] [1767589337.926430111] [camera.camera]: Device with physical ID /sys/devices/pci0000:00/0000:00:14.0/usb4/4-2/4-2:1.0/video4linux/video0 was found.
+[INFO] [1767589337.926449700] [camera.camera]: Device with name Intel RealSense D435I was found.
+[INFO] [1767589337.926663526] [camera.camera]: Device with port number 4-2 was found.
+[INFO] [1767589337.926695583] [camera.camera]: Device USB type: 3.2
+[INFO] [1767589337.926710398] [camera.camera]: Resetting device...
+[INFO] [1767589342.434394904] [hand_eye_calib_server]: Ready to calibration.
+ 05/01 13:02:22,445 ERROR [129552690968128] (librealsense-exception.h:52) get_dev_capabilities: Cannot open '/dev/video0 Last Error: Permission denied
+ 05/01 13:02:22,446 ERROR [129552690968128] (librealsense-exception.h:52) get_dev_capabilities: Cannot open '/dev/video1 Last Error: Permission denied
+ 05/01 13:02:22,446 ERROR [129552690968128] (librealsense-exception.h:52) get_dev_capabilities: Cannot open '/dev/video2 Last Error: Permission denied
+ 05/01 13:02:22,446 ERROR [129552690968128] (librealsense-exception.h:52) get_dev_capabilities: Cannot open '/dev/video3 Last Error: Permission denied
+ 05/01 13:02:22,446 ERROR [129552690968128] (librealsense-exception.h:52) get_dev_capabilities: Cannot open '/dev/video4 Last Error: Permission denied
+ 05/01 13:02:22,446 ERROR [129552690968128] (librealsense-exception.h:52) get_dev_capabilities: Cannot open '/dev/video5 Last Error: Permission denied
+[INFO] [1767589343.946993456] [camera.camera]: Device with serial number 213622073684 was found.
+
+[INFO] [1767589343.947073275] [camera.camera]: Device with physical ID /sys/devices/pci0000:00/0000:00:14.0/usb4/4-2/4-2:1.0/video4linux/video0 was found.
+[INFO] [1767589343.947088359] [camera.camera]: Device with name Intel RealSense D435I was found.
+[INFO] [1767589343.947244932] [camera.camera]: Device with port number 4-2 was found.
+[INFO] [1767589343.947263211] [camera.camera]: Device USB type: 3.2
+[INFO] [1767589343.947341678] [camera.camera]: getParameters...
+[INFO] [1767589343.947863034] [camera.camera]: JSON file is not provided
+[INFO] [1767589343.947898427] [camera.camera]: Device Name: Intel RealSense D435I
+[INFO] [1767589343.947913078] [camera.camera]: Device Serial No: 213622073684
+[INFO] [1767589343.947925964] [camera.camera]: Device physical port: /sys/devices/pci0000:00/0000:00:14.0/usb4/4-2/4-2:1.0/video4linux/video0
+[INFO] [1767589343.947938676] [camera.camera]: Device FW version: 5.17.0.9
+[INFO] [1767589343.947951488] [camera.camera]: Device Product ID: 0x0B3A
+[INFO] [1767589343.947963053] [camera.camera]: Sync Mode: Off
+[INFO] [1767589344.104966316] [camera.camera]: Stopping Sensor: Depth Module
+[INFO] [1767589344.105071463] [camera.camera]: Stopping Sensor: RGB Camera
+[INFO] [1767589344.105100136] [camera.camera]: Stopping Sensor: Motion Module
+[INFO] [1767589344.122037195] [camera.camera]: Starting Sensor: Depth Module
+[INFO] [1767589344.136527705] [camera.camera]: Open profile: stream_type: Infra(1), Format: Y8, Width: 848, Height: 480, FPS: 30
+[INFO] [1767589344.136629576] [camera.camera]: Open profile: stream_type: Infra(2), Format: Y8, Width: 848, Height: 480, FPS: 30
+[INFO] [1767589344.136654403] [camera.camera]: Open profile: stream_type: Depth(0), Format: Z16, Width: 848, Height: 480, FPS: 30
+[INFO] [1767589344.138145162] [camera.camera]: Starting Sensor: RGB Camera
+[INFO] [1767589344.141312583] [camera.camera]: Open profile: stream_type: Color(0), Format: RGB8, Width: 1280, Height: 720, FPS: 30
+ 05/01 13:02:24,168 WARNING [129552674182720] (ds-calib-parsers.cpp:36) IMU Calibration is not available, default intrinsic and extrinsic will be used.
+[INFO] [1767589344.169956917] [camera.camera]: Starting Sensor: Motion Module
+[INFO] [1767589344.171641396] [camera.camera]: Open profile: stream_type: Accel(0)Format: MOTION_XYZ32F, FPS: 100
+[INFO] [1767589344.171698772] [camera.camera]: Open profile: stream_type: Gyro(0)Format: MOTION_XYZ32F, FPS: 200
+[INFO] [1767589344.177159883] [camera.camera]: RealSense Node Is Up!
+[WARN] [1767589345.122489917] [camera.camera]: XXX Hardware Notification:Motion Module failure,1.76759e+12,Error,Hardware Error
+[WARN] [1767589345.122582940] [camera.camera]: Hardware Notification:Motion Module failure,1.76759e+12,Error,Hardware Error
+[INFO] [launch]: All log files can be found below /home/bosch/.ros/log/2026-01-05-13-02-25-545175-bosch-2227785
+[INFO] [launch]: Default logging verbosity is set to INFO
+[ERROR] [launch]: Caught exception in launch (see debug for traceback): Caught multiple exceptions when trying to load file of format [py]:
+ - NameError: name 'LaunchConfiguration' is not defined
+ - InvalidFrontendLaunchFileError: The launch file may have a syntax error, or its format is unknown
+[INFO] [1767589414.194584043] [rclcpp]: signal_handler(signum=15)
+[INFO] [1767589414.224084581] [rclcpp]: signal_handler(signum=15)
+[INFO] [1767589414.225171514] [camera.camera]: Stop Sensor: Depth Module
+[INFO] [1767589414.225212549] [camera.camera]: Close Sensor. 
+[INFO] [1767589414.230403183] [camera.camera]: Close Sensor - Done. 
+[INFO] [1767589414.230445900] [camera.camera]: Stop Sensor: RGB Camera
+[INFO] [1767589414.230457291] [camera.camera]: Close Sensor. 
+[INFO] [1767589414.235725813] [camera.camera]: Close Sensor - Done. 
+[INFO] [1767589414.235768909] [camera.camera]: Stop Sensor: Motion Module
+[INFO] [1767589414.237356468] [camera.camera]: Close Sensor. 
+[INFO] [1767589414.715482002] [camera.camera]: Close Sensor - Done. 

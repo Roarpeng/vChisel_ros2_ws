@@ -16,6 +16,7 @@ import sys
 import time
 import struct
 import threading
+import math
 
 import rclpy
 from rclpy.node import Node
@@ -36,7 +37,7 @@ class PLCClientNode(Node):
         super().__init__('plc_client_node')
 
         # Parameters (could be remapped via launch)
-        self.declare_parameter('plc_address', '10.77.78.225')
+        self.declare_parameter('plc_address', '192.168.1.36')
         self.declare_parameter('plc_rack', 0)
         self.declare_parameter('plc_slot', 1)
         self.declare_parameter('db_number', 2120)  # Updated to match the working test script
@@ -183,20 +184,48 @@ class PLCClientNode(Node):
                 self.get_logger().debug(f'Successfully wrote REAL to DB{self.db_number}[{offset}] = {value}')
                 return True
             except Exception as e:
-                error_msg = str(e)
-                self.get_logger().error(f'Error writing REAL to DB: {e}')
-                
-                # Check if this is the specific CPU error we're seeing
-                if "CPU : Item not available" in error_msg or "function refused by CPU" in error_msg:
-                    self.get_logger().warning(f'PLC CPU refused write operation at DB{self.db_number} offset {offset}. This may be due to DB configuration or PLC security settings.')
-                    # Add more detailed logging about the attempted write
-                    self.get_logger().info(f'Attempted to write REAL value {value} to DB{self.db_number} at offset {offset}')
-                    self.get_logger().info('PLC Configuration Required: Ensure "Full Access" level and "PUT/GET Communication" are enabled in PLC security settings. Also verify "Optimized Block Access" is turned OFF in the DB properties in TIA Portal.')
-                else:
-                    # For other errors, assume connection problem
-                    self.connected = False
-                
+                self.get_logger().error(f'Failed to write REAL to DB{self.db_number}[{offset}]: {e}')
                 return False
+
+    def quaternion_to_euler_zyx(self, qx, qy, qz, qw):
+        """将四元数转换为欧拉角（ZYX顺序，即绕Z-Y-X轴旋转）
+        返回：[Z, Y, X] 欧拉角（弧度）
+        """
+        # 从四元数计算旋转矩阵
+        # R = [
+        #   [1-2(y^2+z^2), 2(xy-zw), 2(xz+yw)],
+        #   [2(xy+zw), 1-2(x^2+z^2), 2(yz-xw)],
+        #   [2(xz-yw), 2(yz+xw), 1-2(x^2+y^2)]
+        # ]
+        
+        sy = math.sqrt(qx * qx + qy * qy)
+        singular = sy < 1e-6
+
+        x, y, z = 0.0, 0.0, 0.0
+        if not singular:
+            x = math.atan2(2 * (qw * qx + qy * qz), 1 - 2 * (qx * qx + qy * qy))
+            y = math.asin(2 * (qw * qy - qz * qx))
+            z = math.atan2(2 * (qw * qz + qx * qy), 1 - 2 * (qy * qy + qz * qz))
+        else:
+            x = math.atan2(2 * (qw * qx - qy * qz), 1 - 2 * (qx * qx + qz * qz))
+            y = math.asin(2 * (qw * qy + qz * qx))
+            z = 0.0
+
+        # 返回 ZYX 欧拉角（弧度）
+        return [z, y, x]
+
+    def clamp_euler_angles(self, euler_rad):
+        """限制欧拉角在±30度范围内
+        输入：[Z, Y, X] 欧拉角（弧度）
+        输出：限制后的 [Z, Y, X] 欧拉角（弧度）
+        """
+        max_angle = math.pi / 6.0  # 30度 = π/6 弧度
+
+        z_clamped = max(-max_angle, min(max_angle, euler_rad[0]))
+        y_clamped = max(-max_angle, min(max_angle, euler_rad[1]))
+        x_clamped = max(-max_angle, min(max_angle, euler_rad[2]))
+
+        return [z_clamped, y_clamped, x_clamped]
 
     def write_integer_to_db(self, offset, value):
         """向DB写入整数，参考Tsnap7test.py的实现方式"""
@@ -702,10 +731,17 @@ class PLCClientNode(Node):
         if len(resp.pose_list.poses) > 0:
             for i, pose in enumerate(resp.pose_list.poses):
                 if i < 24:  # Only process first 24 poses
-                    # Directly add the float values for x, y, z, rx, ry, rz
+                    # 将四元数转换为欧拉角（ZYX顺序，即ABC）
+                    qx, qy, qz, qw = pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w
+                    euler_rad = self.quaternion_to_euler_zyx(qx, qy, qz, qw)
+
+                    # 限制欧拉角在±30度范围内
+                    clamped_euler_rad = self.clamp_euler_angles(euler_rad)
+
+                    # 添加位置和欧拉角数据（ABC，弧度）
                     vals = [
                         pose.position.x, pose.position.y, pose.position.z,
-                        pose.orientation.x, pose.orientation.y, pose.orientation.z
+                        clamped_euler_rad[0], clamped_euler_rad[1], clamped_euler_rad[2]  # A(Z), B(Y), C(X) 角度（弧度）
                     ]
                     output_data.extend(vals)
 

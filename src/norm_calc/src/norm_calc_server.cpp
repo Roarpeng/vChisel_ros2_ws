@@ -90,6 +90,9 @@ private:
   rclcpp::Service<norm_calc::srv::NormCalcData>::SharedPtr srv_;
   rclcpp::CallbackGroup::SharedPtr callback_group_;
 
+  // 手眼标定矩阵（相机坐标系到工具坐标系）
+  Eigen::Matrix4d T_cam_tool_;
+
   void readParameters() {
     param_.BOX_LEN = this->declare_parameter("BOX_LEN", 0.05);
     param_.BOX_ROW = this->declare_parameter("BOX_ROW", 4);
@@ -123,6 +126,39 @@ private:
     param_.PROTRUSION_TH = this->declare_parameter("PROTRUSION_TH", 0.02);
     param_.TIP_CROP_RATIO = this->declare_parameter("TIP_CROP_RATIO", 0.25);
     param_.BASE_CROP_RATIO = this->declare_parameter("BASE_CROP_RATIO", 0.10);
+
+    // 读取手眼标定矩阵参数
+    std::vector<double> row1 = this->declare_parameter(
+      "hand_eye_calibration.row1",
+      std::vector<double>{1.0, -1.2734571168246914e-17, 1.3885605319037612e-17, -0.8175393051548504});
+    std::vector<double> row2 = this->declare_parameter(
+      "hand_eye_calibration.row2",
+      std::vector<double>{1.2734571168246914e-17, 1.0, 8.725997245916549e-18, 0.10332821476190851});
+    std::vector<double> row3 = this->declare_parameter(
+      "hand_eye_calibration.row3",
+      std::vector<double>{-1.3885605319037612e-17, -8.725997245916549e-18, 1.0, 0.10346660541091252});
+    std::vector<double> row4 = this->declare_parameter(
+      "hand_eye_calibration.row4",
+      std::vector<double>{0.0, 0.0, 0.0, 1.0});
+
+    // 构建手眼标定矩阵
+    T_cam_tool_ = Eigen::Matrix4d::Identity();
+    T_cam_tool_ << row1[0], row1[1], row1[2], row1[3],
+                   row2[0], row2[1], row2[2], row2[3],
+                   row3[0], row3[1], row3[2], row3[3],
+                   row4[0], row4[1], row4[2], row4[3];
+
+    // 输出标定矩阵
+    RCLCPP_INFO(this->get_logger(), "=== 手眼标定矩阵已加载 ===");
+    RCLCPP_INFO(this->get_logger(), "[%.6f, %.6f, %.6f, %.6f]",
+      T_cam_tool_(0,0), T_cam_tool_(0,1), T_cam_tool_(0,2), T_cam_tool_(0,3));
+    RCLCPP_INFO(this->get_logger(), "[%.6f, %.6f, %.6f, %.6f]",
+      T_cam_tool_(1,0), T_cam_tool_(1,1), T_cam_tool_(1,2), T_cam_tool_(1,3));
+    RCLCPP_INFO(this->get_logger(), "[%.6f, %.6f, %.6f, %.6f]",
+      T_cam_tool_(2,0), T_cam_tool_(2,1), T_cam_tool_(2,2), T_cam_tool_(2,3));
+    RCLCPP_INFO(this->get_logger(), "[%.6f, %.6f, %.6f, %.6f]",
+      T_cam_tool_(3,0), T_cam_tool_(3,1), T_cam_tool_(3,2), T_cam_tool_(3,3));
+    RCLCPP_INFO(this->get_logger(), "===========================");
   }
 
   void initGrids() {
@@ -229,14 +265,54 @@ private:
     }
   }
 
+  // 四元数转欧拉角（ZYX顺序，即绕Z-Y-X轴旋转）
+  Eigen::Vector3d quaternionToEulerZYX(const Eigen::Quaterniond &q) {
+    Eigen::Matrix3d R = q.toRotationMatrix();
+
+    double sy = sqrt(R(0,0) * R(0,0) + R(1,0) * R(1,0));
+
+    bool singular = sy < 1e-6;
+
+    double x, y, z;
+    if (!singular) {
+      x = atan2(R(2,1), R(2,2));
+      y = atan2(-R(2,0), sy);
+      z = atan2(R(1,0), R(0,0));
+    } else {
+      x = atan2(-R(1,2), R(1,1));
+      y = atan2(-R(2,0), sy);
+      z = 0;
+    }
+
+    return Eigen::Vector3d(z, y, x); // 返回 ZYX 欧拉角（弧度）
+  }
+
+  // 欧拉角转四元数（ZYX顺序）
+  Eigen::Quaterniond eulerZYXToQuaternion(double z, double y, double x) {
+    Eigen::AngleAxisd rollAngle(x, Eigen::Vector3d::UnitX());
+    Eigen::AngleAxisd pitchAngle(y, Eigen::Vector3d::UnitY());
+    Eigen::AngleAxisd yawAngle(z, Eigen::Vector3d::UnitZ());
+
+    Eigen::Quaterniond q = yawAngle * pitchAngle * rollAngle;
+    return q;
+  }
+
+  // 限制角度在±30度范围内
+  Eigen::Vector3d clampEulerAngles(const Eigen::Vector3d &euler_rad) {
+    const double max_angle = M_PI / 6.0; // 30度 = π/6 弧度
+
+    Eigen::Vector3d clamped;
+    clamped(0) = std::max(-max_angle, std::min(max_angle, euler_rad(0))); // Z轴旋转
+    clamped(1) = std::max(-max_angle, std::min(max_angle, euler_rad(1))); // Y轴旋转
+    clamped(2) = std::max(-max_angle, std::min(max_angle, euler_rad(2))); // X轴旋转
+
+    return clamped;
+  }
+
   void transformPose(const pcl::PointXYZRGBNormal &target,
                      geometry_msgs::msg::Pose &pose) {
-    Eigen::Matrix4d T_cam_tool = Eigen::Matrix4d::Identity();
-    T_cam_tool << 0.002136129093849748, 0.0131617748027531, 0.9999110983665177,
-        -0.3592755296727744, 0.9998109504292265, -0.01935263737141502,
-        -0.001881177444387261, -0.03444265988510906, 0.01932615725645348,
-        0.9997260840404296, -0.01320062630660779, -0.2227647594718163, 0, 0, 0,
-        1;
+    // 使用配置文件中的手眼标定矩阵
+    Eigen::Matrix4d T_cam_tool = T_cam_tool_;
 
     Eigen::Vector4d p_cam(target.x, target.y, target.z, 1.0);
     Eigen::Vector4d p_tool = T_cam_tool * p_cam;
@@ -254,10 +330,19 @@ private:
     Eigen::Quaterniond q =
         Eigen::Quaterniond::FromTwoVectors(tool_z_axis, -n_tool);
 
-    pose.orientation.x = q.x();
-    pose.orientation.y = q.y();
-    pose.orientation.z = q.z();
-    pose.orientation.w = q.w();
+    // 将四元数转换为欧拉角（ZYX顺序）
+    Eigen::Vector3d euler = quaternionToEulerZYX(q);
+
+    // 限制欧拉角在±30度范围内
+    Eigen::Vector3d clamped_euler = clampEulerAngles(euler);
+
+    // 将限制后的欧拉角转换回四元数
+    Eigen::Quaterniond clamped_q = eulerZYXToQuaternion(clamped_euler(0), clamped_euler(1), clamped_euler(2));
+
+    pose.orientation.x = clamped_q.x();
+    pose.orientation.y = clamped_q.y();
+    pose.orientation.z = clamped_q.z();
+    pose.orientation.w = clamped_q.w();
   }
 
   void handleService(
@@ -265,18 +350,34 @@ private:
       std::shared_ptr<norm_calc::srv::NormCalcData::Response> res) {
     RCLCPP_INFO(this->get_logger(), ">>> Processing Request Seq: %d", req->seq);
 
-    // 【修改点】每次请求都重置状态
-    // 这样每次拍照都是一次全新的计算，依靠视觉看到的孔洞来避障，而不是依靠内存
-    for (auto &grid : grids_)
-      grid->reset();
+    // 【修改点】智能状态重置
+    // 只重置 STATE_COMPLETED 的网格，保留 STATE_SKIPPED_ONCE 的状态
+    // 这样第一轮失败的网格会在第二轮尝试宽松模式
+    int pending_count = 0;
+    for (auto &grid : grids_) {
+      if (grid->getState() == chisel_box::STATE_COMPLETED) {
+        grid->reset();
+      } else if (grid->getState() == chisel_box::STATE_PENDING) {
+        pending_count++;
+      }
+    }
+
+    // 如果所有网格都是 STATE_PENDING（第一次运行），则全部重置
+    if (pending_count == (int)grids_.size()) {
+      for (auto &grid : grids_)
+        grid->reset();
+      RCLCPP_INFO(this->get_logger(), "State Reset: All grids PENDING (first run).");
+    } else {
+      RCLCPP_INFO(this->get_logger(), "State Reset: Only COMPLETED grids reset, SKIPPED grids kept for relaxed mode.");
+    }
+
     global_obstacles_->clear();
-    RCLCPP_INFO(this->get_logger(), "State Reset: Ready for new capture.");
 
     if (req->seq == 0) {
       for (auto &grid : grids_)
         grid->reset();
       global_obstacles_->clear();
-      RCLCPP_INFO(this->get_logger(), "State Reset: All grids PENDING.");
+      RCLCPP_INFO(this->get_logger(), "State Reset: All grids PENDING (seq=0).");
     }
 
     // 1. 等待数据
@@ -397,6 +498,57 @@ private:
 
         plan_count++;
       }
+    }
+
+    // 9. 检查点位数量，如果不足网格总数的50%，触发宽松模式
+    int min_points_threshold = (int)(grids_.size() * 0.5);
+    if (plan_count < min_points_threshold) {
+      RCLCPP_WARN(this->get_logger(),
+                  "Strict mode only found %d points (< %d), triggering relaxed mode for skipped grids...",
+                  plan_count, min_points_threshold);
+
+      int relaxed_count = 0;
+      for (auto &grid : grids_) {
+        if (grid->getState() == chisel_box::STATE_SKIPPED_ONCE) {
+          // 强制进入宽松模式
+          pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr roi_cloud(
+              new pcl::PointCloud<pcl::PointXYZRGBNormal>);
+          extractGridROI(processed_cloud, grid, roi_cloud);
+
+          pcl::PointXYZRGBNormal target;
+          if (grid->findBestPoint(roi_cloud, global_obstacles_, target)) {
+            // 1. 存入结果 (Tool Frame)
+            geometry_msgs::msg::Pose tool_pose;
+            transformPose(target, tool_pose);
+            tool_pose.orientation.w = target.curvature;
+            res->pose_list.poses.push_back(tool_pose);
+
+            // 2. 存入可视化 (Camera Frame)
+            geometry_msgs::msg::Pose cam_pose;
+            cam_pose.position.x = target.x;
+            cam_pose.position.y = target.y;
+            cam_pose.position.z = target.z;
+            cam_pose.orientation.x = target.normal_x;
+            cam_pose.orientation.y = target.normal_y;
+            cam_pose.orientation.z = target.normal_z;
+            cam_pose.orientation.w = 0;
+            visual_poses.poses.push_back(cam_pose);
+
+            pcl::PointXYZ new_obstacle;
+            new_obstacle.x = target.x;
+            new_obstacle.y = target.y;
+            new_obstacle.z = target.z;
+            global_obstacles_->push_back(new_obstacle);
+
+            plan_count++;
+            relaxed_count++;
+          }
+        }
+      }
+
+      RCLCPP_INFO(this->get_logger(),
+                  "Relaxed mode found %d additional points, total: %d",
+                  relaxed_count, plan_count);
     }
 
     res->pose_list.header.stamp = this->get_clock()->now();

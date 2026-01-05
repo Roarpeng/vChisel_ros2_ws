@@ -1,0 +1,67 @@
+[INFO] [1767589519.989323220] [camera.camera]: RealSense ROS v4.56.4
+[INFO] [1767589519.989474915] [camera.camera]: Built with LibRealSense v2.56.4
+[INFO] [1767589519.989494444] [camera.camera]: Running with LibRealSense v2.56.4
+[INFO] [1767589519.998462806] [camera.camera]: Device with serial number 213622073684 was found.
+
+[INFO] [1767589519.998638508] [camera.camera]: Device with physical ID /sys/devices/pci0000:00/0000:00:14.0/usb4/4-2/4-2:1.0/video4linux/video0 was found.
+[INFO] [1767589519.998668465] [camera.camera]: Device with name Intel RealSense D435I was found.
+[INFO] [1767589519.998871443] [camera.camera]: Device with port number 4-2 was found.
+[INFO] [1767589519.998891012] [camera.camera]: Device USB type: 3.2
+[INFO] [1767589519.998902636] [camera.camera]: Resetting device...
+ 05/01 13:05:24,524 ERROR [139041223734848] (librealsense-exception.h:52) get_dev_capabilities: Cannot open '/dev/video0 Last Error: Permission denied
+ 05/01 13:05:24,525 ERROR [139041223734848] (librealsense-exception.h:52) get_dev_capabilities: Cannot open '/dev/video1 Last Error: Permission denied
+ 05/01 13:05:24,525 ERROR [139041223734848] (librealsense-exception.h:52) get_dev_capabilities: Cannot open '/dev/video2 Last Error: Permission denied
+ 05/01 13:05:24,525 ERROR [139041223734848] (librealsense-exception.h:52) get_dev_capabilities: Cannot open '/dev/video3 Last Error: Permission denied
+ 05/01 13:05:24,526 ERROR [139041223734848] (librealsense-exception.h:52) get_dev_capabilities: Cannot open '/dev/video4 Last Error: Permission denied
+ 05/01 13:05:24,526 ERROR [139041223734848] (librealsense-exception.h:52) get_dev_capabilities: Cannot open '/dev/video5 Last Error: Permission denied
+[INFO] [1767589525.213177838] [hand_eye_calib_server]: Ready to calibration.
+[INFO] [1767589526.006896386] [camera.camera]: Device with serial number 213622073684 was found.
+
+[INFO] [1767589526.006970405] [camera.camera]: Device with physical ID /sys/devices/pci0000:00/0000:00:14.0/usb4/4-2/4-2:1.0/video4linux/video0 was found.
+[INFO] [1767589526.006986609] [camera.camera]: Device with name Intel RealSense D435I was found.
+[INFO] [1767589526.007153440] [camera.camera]: Device with port number 4-2 was found.
+[INFO] [1767589526.007173873] [camera.camera]: Device USB type: 3.2
+[INFO] [1767589526.007260506] [camera.camera]: getParameters...
+[INFO] [1767589526.007668722] [camera.camera]: JSON file is not provided
+[INFO] [1767589526.007707863] [camera.camera]: Device Name: Intel RealSense D435I
+[INFO] [1767589526.007723400] [camera.camera]: Device Serial No: 213622073684
+[INFO] [1767589526.007737748] [camera.camera]: Device physical port: /sys/devices/pci0000:00/0000:00:14.0/usb4/4-2/4-2:1.0/video4linux/video0
+[INFO] [1767589526.007750101] [camera.camera]: Device FW version: 5.17.0.9
+[INFO] [1767589526.007762022] [camera.camera]: Device Product ID: 0x0B3A
+[INFO] [1767589526.007773543] [camera.camera]: Sync Mode: Off
+[INFO] [1767589526.144117488] [camera.camera]: Stopping Sensor: Depth Module
+[INFO] [1767589526.144215225] [camera.camera]: Stopping Sensor: RGB Camera
+[INFO] [1767589526.144243794] [camera.camera]: Stopping Sensor: Motion Module
+[INFO] [1767589526.150940622] [camera.camera]: Starting Sensor: Depth Module
+[INFO] [1767589526.166209793] [camera.camera]: Open profile: stream_type: Infra(1), Format: Y8, Width: 848, Height: 480, FPS: 30
+[INFO] [1767589526.166302020] [camera.camera]: Open profile: stream_type: Infra(2), Format: Y8, Width: 848, Height: 480, FPS: 30
+[INFO] [1767589526.166330461] [camera.camera]: Open profile: stream_type: Depth(0), Format: Z16, Width: 848, Height: 480, FPS: 30
+[INFO] [1767589526.167760784] [camera.camera]: Starting Sensor: RGB Camera
+[INFO] [1767589526.171984189] [camera.camera]: Open profile: stream_type: Color(0), Format: RGB8, Width: 1280, Height: 720, FPS: 30
+ 05/01 13:05:26,197 WARNING [139041206949440] (ds-calib-parsers.cpp:36) IMU Calibration is not available, default intrinsic and extrinsic will be used.
+[INFO] [1767589526.199482476] [camera.camera]: Starting Sensor: Motion Module
+[INFO] [1767589526.201245290] [camera.camera]: Open profile: stream_type: Accel(0)Format: MOTION_XYZ32F, FPS: 100
+[INFO] [1767589526.201295917] [camera.camera]: Open profile: stream_type: Gyro(0)Format: MOTION_XYZ32F, FPS: 200
+[INFO] [1767589526.206499809] [camera.camera]: RealSense Node Is Up!
+[WARN] [1767589527.151564551] [camera.camera]: XXX Hardware Notification:Motion Module failure,1.76759e+12,Error,Hardware Error
+[WARN] [1767589527.151664826] [camera.camera]: Hardware Notification:Motion Module failure,1.76759e+12,Error,Hardware Error
+[INFO] [launch]: All log files can be found below /home/bosch/.ros/log/2026-01-05-13-05-27-960229-bosch-2229407
+[INFO] [launch]: Default logging verbosity is set to INFO
+[INFO] [single-1]: process started with pid [2229409]
+[single-1] [INFO] [1767589528.428079603] [aruco_single]: Threshold method: THRESH_ADAPTIVE
+[single-1] [INFO] [1767589528.428459767] [aruco_single]: Marker size min: 0.02 of image area
+[single-1] [INFO] [1767589528.428482980] [aruco_single]: Detection mode: 
+[single-1] [INFO] [1767589528.437217452] [aruco_single]: ArUco node started with marker size of 0.100000 m and marker id to track: 123
+[single-1] [INFO] [1767589528.437279119] [aruco_single]: ArUco node will publish pose to TF with camera_color_optical_frame as parent and aruco_marker_frame as child.
+[single-1] [INFO] [1767589528.437300592] [aruco_single]: Setup of aruco_simple node is successful!
+[INFO] [1767589558.475723957] [rclcpp]: signal_handler(signum=15)
+[INFO] [1767589558.501203705] [rclcpp]: signal_handler(signum=15)
+[INFO] [1767589558.501800020] [camera.camera]: Stop Sensor: Depth Module
+[INFO] [1767589558.501840887] [camera.camera]: Close Sensor. 
+[INFO] [1767589558.505198077] [camera.camera]: Close Sensor - Done. 
+[INFO] [1767589558.505241814] [camera.camera]: Stop Sensor: RGB Camera
+[INFO] [1767589558.505253691] [camera.camera]: Close Sensor. 
+[INFO] [1767589558.507587185] [camera.camera]: Close Sensor - Done. 
+[INFO] [1767589558.507653876] [camera.camera]: Stop Sensor: Motion Module
+[INFO] [1767589558.507922056] [camera.camera]: Close Sensor. 
+[INFO] [1767589558.662767828] [camera.camera]: Close Sensor - Done. 

@@ -124,6 +124,12 @@ install(DIRECTORY
   DESTINATION include/
 )
 
+# Install config files
+install(DIRECTORY
+  config/
+  DESTINATION share/${PROJECT_NAME}/config
+)
+
 # Install launch files
 install(DIRECTORY
   launch/
