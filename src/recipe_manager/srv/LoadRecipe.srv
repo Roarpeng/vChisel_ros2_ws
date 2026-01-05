@@ -1,0 +1,8 @@
+# LoadRecipe.srv
+# 加载指定配方
+
+string name                    # 配方名称
+---
+recipe_manager/Recipe recipe   # 配方数据
+bool success
+string message

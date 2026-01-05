@@ -10,7 +10,12 @@ setup(
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
-        ('share/' + package_name + '/launch', ['launch/snap_7.launch.py', 'launch/system_launch.py']),
+        ('share/' + package_name + '/launch', [
+            'launch/snap_7.launch.py',
+            'launch/system_launch.py',
+            'launch/plc_sim.launch.py',
+            'launch/test_plc_sim.launch.py',
+        ]),
     ],
     install_requires=['setuptools'],
     zip_safe=True,

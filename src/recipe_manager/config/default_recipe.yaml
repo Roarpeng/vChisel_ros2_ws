@@ -1,0 +1,40 @@
+# Default Recipe Configuration for vChisel
+# 默认配方配置
+
+name: "default"
+description: "Default recipe for concrete surface processing"
+version: "1.0.0"
+
+# 区域设置
+box_len: 50.0          # 盒子长度 (mm)
+box_row: 5             # 行数
+box_column: 5          # 列数
+
+# 工作范围限制 (mm)
+x_min: -500.0
+x_max: 500.0
+y_min: -500.0
+y_max: 500.0
+z_min: 0.0
+z_max: 1000.0
+
+# 严格模式参数（用于高质量要求场景）
+strict_norm_th: 0.8        # 法向量阈值
+strict_hole_dist: 10.0     # 孔洞最小距离
+strict_curv_th: 0.1        # 曲率阈值
+
+# 宽松模式参数（用于一般场景）
+relaxed_norm_th: 0.6
+relaxed_hole_dist: 20.0
+relaxed_curv_th: 0.2
+
+# 评分权重（总和应为1.0）
+height_weight: 0.3         # 高度权重
+curv_weight: 0.2           # 曲率权重
+angle_weight: 0.3          # 角度权重
+center_weight: 0.2         # 中心距离权重
+
+# 凸起处理参数
+protrusion_th: 5.0         # 凸起检测阈值 (mm)
+tip_crop_ratio: 0.1        # 顶部裁剪比例
+base_crop_ratio: 0.2       # 底部裁剪比例

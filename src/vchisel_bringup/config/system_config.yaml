@@ -1,0 +1,69 @@
+# vChisel System Configuration
+# 系统默认配置
+
+# PLC连接配置
+plc:
+  ip: "192.168.0.1"
+  rack: 0
+  slot: 1
+  db_number: 2120
+  db_start: 64
+  poll_interval_ms: 100
+
+# 相机配置
+camera:
+  serial_number: ""  # 留空自动检测
+  enable_color: true
+  enable_depth: true
+  color_width: 1280
+  color_height: 720
+  depth_width: 1280
+  depth_height: 720
+  fps: 30
+  align_depth: true
+  pointcloud_enable: true
+
+# 法向量计算配置
+norm_calc:
+  depth_threshold_min: 0.1  # 最小深度(米)
+  depth_threshold_max: 2.0  # 最大深度(米)
+  normal_estimation_radius: 0.02  # 法向量估计半径
+  voxel_size: 0.005  # 体素大小
+
+# 标定配置
+calibration:
+  # 相机内参标定
+  intrinsic:
+    chessboard_rows: 9
+    chessboard_cols: 6
+    square_size: 0.025  # 棋盘格边长(米)
+    min_samples: 15
+    max_samples: 30
+  # 手眼标定
+  handeye:
+    marker_id: 0
+    marker_size: 0.1  # ArUco标记边长(米)
+    min_poses: 10
+    max_poses: 20
+    method: "TSAI"  # TSAI, PARK, HORAUD, DANIILIDIS
+
+# 配方管理配置
+recipe:
+  storage_dir: "~/.vchisel/recipes"
+  default_recipe: "default"
+  auto_backup: true
+  max_backups: 10
+
+# UI桥接配置
+bridge:
+  rosbridge_port: 9090
+  max_alarm_history: 100
+  status_publish_rate: 1.0  # Hz
+  alarm_stats_rate: 5.0  # Hz
+
+# 报警级别定义
+alarm_levels:
+  INFO: 0
+  WARNING: 1
+  ERROR: 2
+  CRITICAL: 3

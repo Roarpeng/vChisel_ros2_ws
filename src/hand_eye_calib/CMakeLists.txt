@@ -17,8 +17,9 @@ find_package(geometry_msgs REQUIRED)
 find_package(OpenCV REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 
-# Generate service interfaces
+# Generate service and message interfaces
 rosidl_generate_interfaces(${PROJECT_NAME}
+  "msg/CalibrationStatus.msg"
   "srv/HandEyeCalibData.srv"
   DEPENDENCIES geometry_msgs
 )
@@ -56,12 +57,19 @@ install(TARGETS
 
 install(PROGRAMS
   scripts/hand_eye_bringup.py
+  scripts/camera_calibration.py
+  scripts/auto_calibration_node.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
 install(DIRECTORY
   include/
   DESTINATION include/
+)
+
+install(DIRECTORY
+  launch/
+  DESTINATION share/${PROJECT_NAME}/launch
 )
 
 ament_package()

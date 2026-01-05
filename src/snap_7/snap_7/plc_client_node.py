@@ -20,7 +20,7 @@ import threading
 import rclpy
 from rclpy.node import Node
 from rclpy.duration import Duration
-from norm_calc.srv import NormCalcData
+from norm_calc.srv import NormCalcData, GetRobotPose
 import subprocess
 import shlex
 
@@ -36,7 +36,7 @@ class PLCClientNode(Node):
         super().__init__('plc_client_node')
 
         # Parameters (could be remapped via launch)
-        self.declare_parameter('plc_address', '192.168.50.225')
+        self.declare_parameter('plc_address', '10.77.78.225')
         self.declare_parameter('plc_rack', 0)
         self.declare_parameter('plc_slot', 1)
         self.declare_parameter('db_number', 2120)  # Updated to match the working test script
@@ -83,6 +83,11 @@ class PLCClientNode(Node):
         self.camera_connect_time = None  # 记录相机连接时间
         self.grace_period_seconds = 10  # 宽限期，在此期间对断开更宽容
 
+        # 标定状态变量
+        self.calib_mode = False  # 是否处于标定模式
+        self.prev_plc_calib_status = 0  # 上一次的PLC标定状态
+        self.calib_point_count = 0  # 已采集的标定点数
+
         # buffers for pages
         self.Output_Status = []
         self.Outputlist = [0] * 288
@@ -96,6 +101,13 @@ class PLCClientNode(Node):
         self.cli = self.create_client(NormCalcData, 'norm_calc')
         if not self.cli.wait_for_service(timeout_sec=5.0):
             self.get_logger().warning('norm_calc service not available yet')
+
+        # Create service for getting robot pose
+        self.get_robot_pose_srv = self.create_service(
+            GetRobotPose,
+            'get_robot_pose',
+            self.handle_get_robot_pose
+        )
 
         # Start polling timer
         timer_period = 1.0 / max(self.poll_rate, 0.1)
@@ -358,9 +370,170 @@ class PLCClientNode(Node):
         # This allows the program to continue functioning
         return success_count > 0 or len(reg_list) == 0
 
+    def read_robot_pose(self):
+        """从PLC读取机器人位姿数据（6个REAL值：X,Y,Z,A,B,C）
+        DB偏移600-623，共24字节（6个REAL，每个4字节）
+        """
+        with self.lock:
+            try:
+                if self.simulate_plc:
+                    # 仿真模式返回模拟数据
+                    self.get_logger().info('[LOG] Simulated read robot pose')
+                    return [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], True, "Simulated data"
+
+                # 尝试连接
+                if not self.client.get_connected():
+                    self.connect()
+                    if not self.connected:
+                        return [0.0] * 6, False, "Not connected to PLC"
+
+                # 从DB偏移600读取24字节（6个REAL值）
+                data = self.client.db_read(self.db_number, 600, 24)
+
+                # 解析6个REAL值（大端序，IEEE 754单精度浮点数）
+                pose = []
+                for i in range(6):
+                    offset = i * 4
+                    real_bytes = data[offset:offset+4]
+                    value = struct.unpack('>f', real_bytes)[0]
+                    pose.append(float(value))
+
+                self.get_logger().debug(f'Read robot pose: X={pose[0]:.2f}, Y={pose[1]:.2f}, Z={pose[2]:.2f}, A={pose[3]:.2f}, B={pose[4]:.2f}, C={pose[5]:.2f}')
+                return pose, True, "Success"
+
+            except Exception as e:
+                self.get_logger().error(f'Error reading robot pose from DB: {e}')
+                return [0.0] * 6, False, f"Read error: {str(e)}"
+
+    def handle_get_robot_pose(self, request, response):
+        """处理获取机器人位姿的服务请求"""
+        pose, success, message = self.read_robot_pose()
+        response.pose = pose
+        response.success = success
+        response.message = message
+        return response
+
+    def write_calib_status(self, status_code):
+        """写入标定状态反馈到PLC（rosCalibStatus）
+        DB偏移626-627（INT类型）
+        """
+        return self.write_integer_to_db(626, status_code)
+
+    def write_calib_point_count(self, count):
+        """写入已采集标定点数到PLC
+        DB偏移628-629（INT类型）
+        """
+        return self.write_integer_to_db(628, count)
+
+    def write_calib_quality_score(self, score):
+        """写入标定质量评分到PLC
+        DB偏移630-631（INT类型，0-100）
+        """
+        score = max(0, min(100, int(score)))  # 限制在0-100范围
+        return self.write_integer_to_db(630, score)
+
+    def read_plc_calib_status(self):
+        """读取PLC标定触发状态（plcCalibStatus）
+        DB偏移624-625（INT类型）
+        """
+        data = self.read_db_area(DB_num=self.db_number, start=624, size=2)
+        if data is None:
+            return 0
+        try:
+            status = int.from_bytes(data[0:2], byteorder='big', signed=False)
+            return status
+        except Exception:
+            return 0
+
+    def handle_calibration_status(self, plc_calib_status):
+        """处理标定状态轮询逻辑
+
+        PLC状态码：
+        - 300: 开始标定
+        - 310: 采集点位
+        - 320: 计算标定
+        - 330: 保存结果
+        - 340: 退出标定
+
+        ROS反馈状态码：
+        - 311: 采集成功
+        - 312: 采集失败
+        - 321: 计算完成
+        - 322: 计算失败
+        - 331: 保存成功
+        - 332: 保存失败
+        """
+        if plc_calib_status == self.prev_plc_calib_status:
+            return  # 状态未变化，无需处理
+
+        self.get_logger().info(f'Calibration status changed: {self.prev_plc_calib_status} -> {plc_calib_status}')
+
+        if plc_calib_status == 300:
+            # 开始标定
+            self.get_logger().info('Starting calibration mode')
+            self.calib_mode = True
+            self.calib_point_count = 0
+            self.write_calib_status(300)  # 确认进入标定模式
+            self.write_calib_point_count(0)
+
+        elif plc_calib_status == 310:
+            # 采集点位
+            self.get_logger().info('Capturing calibration point')
+            if not self.calib_mode:
+                self.get_logger().warning('Not in calibration mode, ignoring capture request')
+                self.write_calib_status(312)  # 采集失败
+                return
+
+            # 读取机器人位姿
+            pose, success, message = self.read_robot_pose()
+            if success:
+                self.calib_point_count += 1
+                self.get_logger().info(f'Captured point {self.calib_point_count}: {pose}')
+                self.write_calib_status(311)  # 采集成功
+                self.write_calib_point_count(self.calib_point_count)
+                # TODO: 实际的标定点数据应该保存到标定节点
+            else:
+                self.get_logger().error(f'Failed to capture point: {message}')
+                self.write_calib_status(312)  # 采集失败
+
+        elif plc_calib_status == 320:
+            # 计算标定
+            self.get_logger().info('Computing calibration')
+            if not self.calib_mode:
+                self.get_logger().warning('Not in calibration mode, ignoring compute request')
+                self.write_calib_status(322)  # 计算失败
+                return
+
+            # TODO: 调用手眼标定服务进行计算
+            self.get_logger().info(f'Computing calibration with {self.calib_point_count} points')
+            # 暂时模拟计算成功
+            self.write_calib_status(321)  # 计算完成
+            self.write_calib_quality_score(85)  # 模拟质量评分
+
+        elif plc_calib_status == 330:
+            # 保存结果
+            self.get_logger().info('Saving calibration results')
+            if not self.calib_mode:
+                self.get_logger().warning('Not in calibration mode, ignoring save request')
+                self.write_calib_status(332)  # 保存失败
+                return
+
+            # TODO: 保存标定结果到文件
+            self.get_logger().info('Calibration results saved')
+            self.write_calib_status(331)  # 保存成功
+
+        elif plc_calib_status == 340:
+            # 退出标定
+            self.get_logger().info('Exiting calibration mode')
+            self.calib_mode = False
+            self.calib_point_count = 0
+            self.write_calib_status(0)  # 清空状态
+
+        self.prev_plc_calib_status = plc_calib_status
+
     def Clean_Buffer(self):
         # Clear data for offsets 20-592 (从偏移20开始到592)
-        # 144个REAL值需要576字节 (144 * 4) 
+        # 144个REAL值需要576字节 (144 * 4)
         zlist = [0.0] * 144  # 使用浮点数0.0来清空
         self.write_real_array_to_db(zlist, start=20)
         self.get_logger().info('Clear All Data In Buffer!')
@@ -787,6 +960,11 @@ class PLCClientNode(Node):
             plcStatus = 0
 
         self.get_logger().debug(f'plcStatus: {plcStatus}')  # Use debug to reduce spam
+
+        # Read and handle calibration status
+        plc_calib_status = self.read_plc_calib_status()
+        if plc_calib_status > 0:
+            self.handle_calibration_status(plc_calib_status)
 
         if self.prev_trigger is None:
             self.prev_trigger = plcStatus

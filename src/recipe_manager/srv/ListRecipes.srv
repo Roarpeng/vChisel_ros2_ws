@@ -1,0 +1,8 @@
+# ListRecipes.srv
+# 列出所有配方
+
+---
+recipe_manager/RecipeInfo[] recipes    # 配方列表
+string active_recipe                    # 当前激活的配方名称
+bool success
+string message

@@ -1,0 +1,10 @@
+# GetRobotPose.srv
+# Service to read current robot pose from PLC
+# Used for hand-eye calibration
+
+# Request (empty - just triggers a read)
+---
+# Response
+float64[6] pose      # Robot pose: X, Y, Z, A, B, C (mm, degrees)
+bool success         # True if read successful
+string message       # Status message or error description

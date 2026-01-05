@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>vChisel ROS Bridge Test</title>
+    <script src="https://cdn.jsdelivr.net/npm/roslib@1/build/roslib.min.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; padding: 20px; background: #1a1a1a; color: #fff; }
+        .card { background: #2a2a2a; padding: 15px; margin: 10px 0; border-radius: 8px; }
+        .status { display: inline-block; width: 12px; height: 12px; border-radius: 50%; margin-right: 8px; }
+        .connected { background: #4CAF50; }
+        .disconnected { background: #f44336; }
+        button { background: #E20015; color: white; border: none; padding: 10px 20px; cursor: pointer; border-radius: 4px; margin: 5px; }
+        button:hover { background: #b8000f; }
+        pre { background: #333; padding: 10px; border-radius: 4px; overflow-x: auto; }
+        h1 { color: #E20015; }
+    </style>
+</head>
+<body>
+    <h1>vChisel ROS Bridge 测试</h1>
+
+    <div class="card">
+        <h3>连接状态</h3>
+        <p><span id="status-indicator" class="status disconnected"></span><span id="connection-status">未连接</span></p>
+        <input type="text" id="ros-url" value="ws://localhost:9090" style="width: 300px; padding: 8px;">
+        <button onclick="connect()">连接</button>
+        <button onclick="disconnect()">断开</button>
+    </div>
+
+    <div class="card">
+        <h3>系统状态 (vchisel/system_status)</h3>
+        <pre id="system-status">等待数据...</pre>
+    </div>
+
+    <div class="card">
+        <h3>报警统计 (vchisel/alarm_stats)</h3>
+        <pre id="alarm-stats">等待数据...</pre>
+    </div>
+
+    <div class="card">
+        <h3>PLC仿真状态 (plc_sim/status)</h3>
+        <pre id="plc-status">等待数据...</pre>
+    </div>
+
+    <div class="card">
+        <h3>服务测试</h3>
+        <button onclick="callGetStatus()">获取系统状态</button>
+        <button onclick="callClearAlarms()">清除报警</button>
+        <pre id="service-result">点击按钮测试服务调用...</pre>
+    </div>
+
+    <script>
+        let ros = null;
+        let systemStatusListener = null;
+        let alarmStatsListener = null;
+        let plcStatusListener = null;
+
+        function connect() {
+            const url = document.getElementById('ros-url').value;
+
+            ros = new ROSLIB.Ros({ url: url });
+
+            ros.on('connection', function() {
+                document.getElementById('status-indicator').className = 'status connected';
+                document.getElementById('connection-status').textContent = '已连接到 ' + url;
+                subscribeToTopics();
+            });
+
+            ros.on('error', function(error) {
+                document.getElementById('status-indicator').className = 'status disconnected';
+                document.getElementById('connection-status').textContent = '连接错误: ' + error;
+            });
+
+            ros.on('close', function() {
+                document.getElementById('status-indicator').className = 'status disconnected';
+                document.getElementById('connection-status').textContent = '连接已关闭';
+            });
+        }
+
+        function disconnect() {
+            if (ros) {
+                ros.close();
+            }
+        }
+
+        function subscribeToTopics() {
+            // 系统状态
+            systemStatusListener = new ROSLIB.Topic({
+                ros: ros,
+                name: '/vchisel/system_status',
+                messageType: 'std_msgs/String'
+            });
+            systemStatusListener.subscribe(function(msg) {
+                document.getElementById('system-status').textContent = formatPythonDict(msg.data);
+            });
+
+            // 报警统计
+            alarmStatsListener = new ROSLIB.Topic({
+                ros: ros,
+                name: '/vchisel/alarm_stats',
+                messageType: 'std_msgs/String'
+            });
+            alarmStatsListener.subscribe(function(msg) {
+                document.getElementById('alarm-stats').textContent = formatPythonDict(msg.data);
+            });
+
+            // PLC仿真状态
+            plcStatusListener = new ROSLIB.Topic({
+                ros: ros,
+                name: '/plc_sim/status',
+                messageType: 'std_msgs/String'
+            });
+            plcStatusListener.subscribe(function(msg) {
+                document.getElementById('plc-status').textContent = formatPythonDict(msg.data);
+            });
+        }
+
+        function formatPythonDict(pyStr) {
+            try {
+                // 转换Python dict到JSON
+                let jsonStr = pyStr
+                    .replace(/True/g, 'true')
+                    .replace(/False/g, 'false')
+                    .replace(/None/g, 'null')
+                    .replace(/'/g, '"');
+                let obj = JSON.parse(jsonStr);
+                return JSON.stringify(obj, null, 2);
+            } catch (e) {
+                return pyStr;
+            }
+        }
+
+        function callGetStatus() {
+            if (!ros || !ros.isConnected) {
+                document.getElementById('service-result').textContent = '错误: 未连接到ROS';
+                return;
+            }
+
+            let service = new ROSLIB.Service({
+                ros: ros,
+                name: '/vchisel/get_status',
+                serviceType: 'std_srvs/Trigger'
+            });
+
+            let request = new ROSLIB.ServiceRequest({});
+            service.callService(request, function(result) {
+                document.getElementById('service-result').textContent =
+                    '成功: ' + result.success + '\n消息: ' + formatPythonDict(result.message);
+            }, function(error) {
+                document.getElementById('service-result').textContent = '错误: ' + error;
+            });
+        }
+
+        function callClearAlarms() {
+            if (!ros || !ros.isConnected) {
+                document.getElementById('service-result').textContent = '错误: 未连接到ROS';
+                return;
+            }
+
+            let service = new ROSLIB.Service({
+                ros: ros,
+                name: '/vchisel/clear_alarms',
+                serviceType: 'std_srvs/Trigger'
+            });
+
+            let request = new ROSLIB.ServiceRequest({});
+            service.callService(request, function(result) {
+                document.getElementById('service-result').textContent =
+                    '成功: ' + result.success + '\n消息: ' + result.message;
+            }, function(error) {
+                document.getElementById('service-result').textContent = '错误: ' + error;
+            });
+        }
+    </script>
+</body>
+</html>

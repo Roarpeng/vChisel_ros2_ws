@@ -271,3 +271,218 @@ bool hand_eye_calib_calc(int num,
 	return true;
 }
 
+/**
+ * @brief 评估手眼标定质量
+ * @param Homo_gripper2base 机械臂末端到基座的变换矩阵列表
+ * @param Homo_target2cam 标定板到相机的变换矩阵列表
+ * @param Homo_cam2gripper 相机到末端的变换矩阵（标定结果）
+ * @return 标定质量评估结果
+ */
+CalibrationQuality evaluate_calibration_quality(
+	const std::vector<cv::Mat>& Homo_gripper2base,
+	const std::vector<cv::Mat>& Homo_target2cam,
+	const cv::Mat& Homo_cam2gripper)
+{
+	CalibrationQuality quality;
+	quality.reprojection_error = 0.0;
+	quality.consistency_score = 0.0;
+	quality.rotation_error = 0.0;
+	quality.translation_error = 0.0;
+	quality.quality_grade = 3;
+	quality.quality_message = "Unknown";
+
+	if (Homo_gripper2base.size() < 2 || Homo_target2cam.size() < 2) {
+		quality.quality_message = "Insufficient data points";
+		return quality;
+	}
+
+	size_t n = Homo_gripper2base.size();
+
+	// 计算标定板在基座坐标系中的位置一致性
+	// T_base_target = T_base_gripper * T_gripper_cam * T_cam_target
+	std::vector<cv::Mat> world_positions;
+	cv::Mat cheesePos = (cv::Mat_<double>(4, 1) << 0.0, 0.0, 0.0, 1.0);
+
+	for (size_t i = 0; i < n; ++i) {
+		cv::Mat worldPos = Homo_gripper2base[i] * Homo_cam2gripper * Homo_target2cam[i] * cheesePos;
+		world_positions.push_back(worldPos);
+	}
+
+	// 计算所有位置的标准差作为一致性指标
+	double mean_x = 0, mean_y = 0, mean_z = 0;
+	for (const auto& pos : world_positions) {
+		mean_x += pos.at<double>(0, 0);
+		mean_y += pos.at<double>(1, 0);
+		mean_z += pos.at<double>(2, 0);
+	}
+	mean_x /= n;
+	mean_y /= n;
+	mean_z /= n;
+
+	double var_sum = 0;
+	for (const auto& pos : world_positions) {
+		double dx = pos.at<double>(0, 0) - mean_x;
+		double dy = pos.at<double>(1, 0) - mean_y;
+		double dz = pos.at<double>(2, 0) - mean_z;
+		var_sum += dx * dx + dy * dy + dz * dz;
+	}
+	double std_dev = std::sqrt(var_sum / n);  // 标准差 (m)
+	quality.translation_error = std_dev * 1000;  // 转换为 mm
+
+	// 计算重投影误差：使用交叉验证方法
+	// 对于每对相邻的数据点，计算预测位置与实际位置的差异
+	double total_reproj_error = 0;
+	int pair_count = 0;
+
+	for (size_t i = 0; i < n - 1; ++i) {
+		for (size_t j = i + 1; j < n; ++j) {
+			// 使用第i组数据预测第j组的标定板位置
+			cv::Mat predicted_target_cam_j = Homo_cam2gripper.inv() *
+				Homo_gripper2base[j].inv() *
+				Homo_gripper2base[i] *
+				Homo_cam2gripper *
+				Homo_target2cam[i];
+
+			// 计算预测位置与实际位置的差异
+			cv::Mat diff = predicted_target_cam_j - Homo_target2cam[j];
+			cv::Mat translation_diff = diff(cv::Rect(3, 0, 1, 3));
+			double error = cv::norm(translation_diff) * 1000;  // 转换为 mm
+			total_reproj_error += error;
+			pair_count++;
+		}
+	}
+
+	quality.reprojection_error = (pair_count > 0) ? (total_reproj_error / pair_count) : 0;
+
+	// 计算旋转一致性误差
+	double total_rot_error = 0;
+	for (size_t i = 0; i < n - 1; ++i) {
+		cv::Mat R1 = Homo_gripper2base[i](cv::Rect(0, 0, 3, 3)) *
+			Homo_cam2gripper(cv::Rect(0, 0, 3, 3)) *
+			Homo_target2cam[i](cv::Rect(0, 0, 3, 3));
+		cv::Mat R2 = Homo_gripper2base[i + 1](cv::Rect(0, 0, 3, 3)) *
+			Homo_cam2gripper(cv::Rect(0, 0, 3, 3)) *
+			Homo_target2cam[i + 1](cv::Rect(0, 0, 3, 3));
+
+		// 计算旋转差异
+		cv::Mat R_diff = R1.t() * R2;
+		cv::Mat rvec;
+		cv::Rodrigues(R_diff, rvec);
+		double angle = cv::norm(rvec) * 180.0 / CV_PI;  // 转换为度
+		total_rot_error += angle;
+	}
+	quality.rotation_error = (n > 1) ? (total_rot_error / (n - 1)) : 0;
+
+	// 计算一致性评分 (0-100)
+	// 基于平移误差：< 1mm = 100分, > 10mm = 0分
+	double trans_score = std::max(0.0, std::min(100.0, (10.0 - quality.translation_error) / 9.0 * 100.0));
+	// 基于重投影误差：< 1mm = 100分, > 10mm = 0分
+	double reproj_score = std::max(0.0, std::min(100.0, (10.0 - quality.reprojection_error) / 9.0 * 100.0));
+	// 基于旋转误差：< 0.5度 = 100分, > 5度 = 0分
+	double rot_score = std::max(0.0, std::min(100.0, (5.0 - quality.rotation_error) / 4.5 * 100.0));
+
+	// 综合评分
+	quality.consistency_score = 0.4 * trans_score + 0.4 * reproj_score + 0.2 * rot_score;
+
+	// 确定质量等级
+	if (quality.consistency_score >= 85) {
+		quality.quality_grade = 0;
+		quality.quality_message = "Excellent calibration quality";
+	} else if (quality.consistency_score >= 70) {
+		quality.quality_grade = 1;
+		quality.quality_message = "Good calibration quality";
+	} else if (quality.consistency_score >= 50) {
+		quality.quality_grade = 2;
+		quality.quality_message = "Acceptable calibration quality";
+	} else {
+		quality.quality_grade = 3;
+		quality.quality_message = "Poor calibration quality, recalibration recommended";
+	}
+
+	return quality;
+}
+
+/**
+ * @brief 计算质量评分 (0-100)
+ */
+int calculate_quality_score(const CalibrationQuality& quality)
+{
+	return static_cast<int>(std::round(quality.consistency_score));
+}
+
+/**
+ * @brief 带质量评估的手眼标定函数
+ */
+bool hand_eye_calib_calc_with_quality(int num,
+	Mat& CalPose,
+	Mat& ToolPose,
+	cv::Mat& Homo_cam2gripper,
+	CalibrationQuality& quality)
+{
+	// 定义手眼标定矩阵
+	std::vector<Mat> R_gripper2base;
+	std::vector<Mat> t_gripper2base;
+	std::vector<Mat> R_target2cam;
+	std::vector<Mat> t_target2cam;
+	Mat R_cam2gripper = (Mat_<double>(3, 3));
+	Mat t_cam2gripper = (Mat_<double>(3, 1));
+
+	size_t num_images = num;
+
+	// 保存完整的变换矩阵用于质量评估
+	std::vector<cv::Mat> Homo_gripper2base, Homo_target2cam;
+
+	Mat tempR, tempT;
+
+	std::cout << "输入CalPose为： " << std::endl;
+	std::cout << CalPose << std::endl;
+	std::cout << "输入ToolPose为： " << std::endl;
+	std::cout << ToolPose << std::endl;
+
+	for (size_t i = 0; i < num_images; i++)
+	{
+		cv::Mat tmp = attitudeVectorToMatrix(CalPose.row(i), true, "");
+		Homo_target2cam.push_back(tmp.clone());
+		RT2R_T(tmp, tempR, tempT);
+		R_target2cam.push_back(tempR.clone());
+		t_target2cam.push_back(tempT.clone());
+	}
+
+	for (size_t i = 0; i < num_images; i++)
+	{
+		cv::Mat tmpTool = ToolPose.row(i).clone();
+		double* data = tmpTool.ptr<double>(0);
+		data[0] = data[0] / 1000;
+		data[1] = data[1] / 1000;
+		data[2] = data[2] / 1000;
+
+		cv::Mat tmp = attitudeVectorToMatrix(tmpTool, false, "zyx");
+		Homo_gripper2base.push_back(tmp.clone());
+		RT2R_T(tmp, tempR, tempT);
+		R_gripper2base.push_back(tempR.clone());
+		t_gripper2base.push_back(tempT.clone());
+	}
+
+	// 执行手眼标定
+	calibrateHandEye(R_gripper2base, t_gripper2base, R_target2cam, t_target2cam,
+		R_cam2gripper, t_cam2gripper, CALIB_HAND_EYE_TSAI);
+
+	Homo_cam2gripper = R_T2RT(R_cam2gripper, t_cam2gripper);
+
+	std::cout << "Homo_cam2gripper 矩阵为： " << std::endl;
+	std::cout << Homo_cam2gripper << std::endl;
+	cout << "是否为旋转矩阵：" << isRotationMatrix(Homo_cam2gripper) << std::endl;
+
+	// 评估标定质量
+	quality = evaluate_calibration_quality(Homo_gripper2base, Homo_target2cam, Homo_cam2gripper);
+
+	std::cout << "----标定质量评估----" << std::endl;
+	std::cout << "重投影误差: " << quality.reprojection_error << " mm" << std::endl;
+	std::cout << "平移一致性误差: " << quality.translation_error << " mm" << std::endl;
+	std::cout << "旋转一致性误差: " << quality.rotation_error << " 度" << std::endl;
+	std::cout << "综合评分: " << quality.consistency_score << "/100" << std::endl;
+	std::cout << "质量等级: " << quality.quality_grade << " (" << quality.quality_message << ")" << std::endl;
+
+	return true;
+}
+

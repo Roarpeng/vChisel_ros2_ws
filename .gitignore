@@ -2,3 +2,7 @@
 /build
 /install
 /log
+/src/build
+/src/install
+/src/log
+node_modules/

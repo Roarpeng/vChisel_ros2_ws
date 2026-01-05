@@ -25,6 +25,7 @@ find_package(rosidl_default_generators REQUIRED)
 # Generate services
 rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/NormCalcData.srv"
+  "srv/GetRobotPose.srv"
   DEPENDENCIES
     sensor_msgs
     geometry_msgs

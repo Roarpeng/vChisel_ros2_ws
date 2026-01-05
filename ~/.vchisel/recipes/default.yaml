@@ -1,0 +1,27 @@
+angle_weight: 0.3
+base_crop_ratio: 0.2
+box_column: 5
+box_len: 50.0
+box_row: 5
+center_weight: 0.2
+created_at: '2026-01-04T19:45:07.230693'
+curv_weight: 0.2
+description: Default recipe for vChisel system
+height_weight: 0.3
+name: default
+protrusion_th: 5.0
+relaxed_curv_th: 0.2
+relaxed_hole_dist: 20.0
+relaxed_norm_th: 0.6
+strict_curv_th: 0.1
+strict_hole_dist: 10.0
+strict_norm_th: 0.8
+tip_crop_ratio: 0.1
+updated_at: '2026-01-04T19:45:07.230721'
+version: 1.0.0
+x_max: 500.0
+x_min: -500.0
+y_max: 500.0
+y_min: -500.0
+z_max: 1000.0
+z_min: 0.0

@@ -1,0 +1,9 @@
+# SaveRecipe.srv
+# 保存配方
+
+recipe_manager/Recipe recipe   # 配方数据
+bool overwrite                 # 是否覆盖已存在的配方
+---
+bool success
+string message
+string version                 # 保存后的版本号

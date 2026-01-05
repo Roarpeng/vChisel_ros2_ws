@@ -1,0 +1,7 @@
+# DeleteRecipe.srv
+# 删除配方
+
+string name                    # 配方名称
+---
+bool success
+string message
