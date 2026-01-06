@@ -11,10 +11,11 @@ namespace chisel_box {
 
 // 状态机定义
 enum BoxState {
-  STATE_PENDING = 0,  // 初始状态：待处理
-  STATE_SKIPPED_ONCE, // 中间状态：上次没找到，跳过一次
-  STATE_COMPLETED,    // 终态：已规划/已完成
-  STATE_UNREACHABLE   // 终态：无法作业（两次都找不到）
+  STATE_PENDING = 0,     // 初始状态：待处理
+  STATE_SKIPPED_ONCE,    // 中间状态：严格模式失败
+  STATE_SKIPPED_TWICE,   // 中间状态：宽松模式失败
+  STATE_COMPLETED,       // 终态：已规划/已完成
+  STATE_UNREACHABLE      // 终态：无法作业（三次都找不到）
 };
 
 // 参数聚合
@@ -42,6 +43,10 @@ typedef struct {
   float PROTRUSION_TH;   // 判定为凸起的高度差阈值
   float TIP_CROP_RATIO;  // 切顶比例
   float BASE_CROP_RATIO; // 切底比例
+
+  // [新增] 随机模式参数
+  float RANDOM_OFFSET_RANGE;  // 随机位置偏移范围
+  float RANDOM_ANGLE_RANGE;   // 随机法向角度范围
 
   // [新增] 平面面积阈值（平方米）
   float PLANE_AREA_HIGH;  // 3.5cm² - 平面模式阈值
@@ -82,11 +87,20 @@ private:
   // [新增] 搜索模式枚举
   enum SearchMode { MODE_PLANE, MODE_HYBRID, MODE_PROTRUSION };
 
+  // [新增] 上一次点位存储
+  pcl::PointXYZRGBNormal last_point_;
+  bool has_last_point_;
+
   // [新增] 计算点云的凸包面积（平方米）
   float calculateConvexHullArea(pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud);
 
   // [新增] 根据面积确定搜索模式
   SearchMode determineSearchMode(float area);
+
+  // [新增] 随机模式搜索（基于上一次点位或网格中心）
+  bool searchWithRandomMode(pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud,
+                           pcl::PointCloud<pcl::PointXYZ>::Ptr obstacles,
+                           pcl::PointXYZRGBNormal &result);
 
   // 内部通用搜索逻辑
   bool searchWithCriteria(pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud,

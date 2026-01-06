@@ -6,7 +6,7 @@
 namespace chisel_box {
 
 ChiselBox::ChiselBox(int row, int col, ChiselParam param)
-    : row_(row), col_(col), param_(param), state_(STATE_PENDING) {}
+    : row_(row), col_(col), param_(param), state_(STATE_PENDING), has_last_point_(false) {}
 
 ChiselBox::~ChiselBox() {}
 
@@ -23,57 +23,82 @@ bool ChiselBox::findBestPoint(
   if (cloud_roi->empty())
     return false;
 
-  // === 基于面积的平面优先策略 ===
+  bool found = false;
 
-  // 第一步：计算点云的凸包面积
-  float area = calculateConvexHullArea(cloud_roi);
+  // === 三段式策略：严格模式 → 宽松模式 → 随机模式 ===
 
-  // 第二步：根据面积确定搜索模式
-  SearchMode mode = determineSearchMode(area);
-
-  // 第三步：根据模式选择参数
-  float norm_th, hole_dist, curv_th;
-  std::string mode_name;
-  switch (mode) {
-    case MODE_PLANE:
-      // 平面模式：严格标准
-      norm_th = param_.STRICT_NORM_TH;      // 0.90
-      hole_dist = param_.STRICT_HOLE_DIST;  // 0.05
-      curv_th = param_.STRICT_CURV_TH;      // 0.07
-      mode_name = "PLANE";
-      break;
-    case MODE_HYBRID:
-      // 混合模式：使用中间值
-      norm_th = param_.HYBRID_NORM_TH;      // 0.885
-      hole_dist = param_.HYBRID_HOLE_DIST;  // 0.0425
-      curv_th = param_.HYBRID_CURV_TH;      // 0.085
-      mode_name = "HYBRID";
-      break;
-    case MODE_PROTRUSION:
-      // 凹凸面模式：宽松标准
-      norm_th = param_.RELAXED_NORM_TH;     // 0.87
-      hole_dist = param_.RELAXED_HOLE_DIST; // 0.035
-      curv_th = param_.RELAXED_CURV_TH;     // 0.10
-      mode_name = "PROTRUSION";
-      break;
+  if (state_ == STATE_PENDING) {
+    // 【第一次尝试】：严格模式
+    std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] Attempt 1: STRICT mode" << std::endl;
+    found = searchWithCriteria(cloud_roi, obstacles,
+                               param_.STRICT_NORM_TH,
+                               param_.STRICT_HOLE_DIST,
+                               param_.STRICT_CURV_TH,
+                               out_point);
+    if (found) {
+      state_ = STATE_COMPLETED;
+      last_point_ = out_point;
+      has_last_point_ = true;
+      std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] STRICT mode succeeded" << std::endl;
+      return true;
+    } else {
+      state_ = STATE_SKIPPED_ONCE;
+      std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] STRICT mode failed, trying RELAXED mode" << std::endl;
+    }
   }
 
-  std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] Mode: " << mode_name
-            << " (norm_th: " << norm_th << ", hole_dist: " << hole_dist << ", curv_th: " << curv_th << ")" << std::endl;
+  if (state_ == STATE_SKIPPED_ONCE) {
+    // 【第二次尝试】：宽松模式
+    std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] Attempt 2: RELAXED mode" << std::endl;
+    found = searchWithCriteria(cloud_roi, obstacles,
+                               param_.RELAXED_NORM_TH,
+                               param_.RELAXED_HOLE_DIST,
+                               param_.RELAXED_CURV_TH,
+                               out_point);
+    if (found) {
+      state_ = STATE_COMPLETED;
+      last_point_ = out_point;
+      has_last_point_ = true;
+      std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] RELAXED mode succeeded" << std::endl;
+      return true;
+    } else {
+      state_ = STATE_SKIPPED_TWICE;
+      std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] RELAXED mode failed, trying RANDOM mode" << std::endl;
+    }
+  }
 
-  // 第四步：执行搜索
-  bool found = searchWithCriteria(cloud_roi, obstacles,
-                                 norm_th, hole_dist, curv_th,
+  if (state_ == STATE_SKIPPED_TWICE) {
+    // 【第三次尝试】：随机模式
+    std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] Attempt 3: RANDOM mode" << std::endl;
+    found = searchWithRandomMode(cloud_roi, obstacles, out_point);
+    if (found) {
+      state_ = STATE_COMPLETED;
+      last_point_ = out_point;
+      has_last_point_ = true;
+      std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] RANDOM mode succeeded" << std::endl;
+      return true;
+    } else {
+      // 随机模式也失败，使用最接近网格中心的点作为备用方案
+      std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] RANDOM mode failed, using fallback" << std::endl;
+      found = searchWithCriteria(cloud_roi, obstacles,
+                                 0.5,  // 非常宽松的法向阈值
+                                 0.01, // 非常宽松的避障距离
+                                 1.0,  // 非常宽松的曲率阈值
                                  out_point);
-
-  // 第五步：更新状态
-  if (found) {
-    state_ = STATE_COMPLETED;
-  } else {
-    state_ = STATE_UNREACHABLE;
+      if (found) {
+        state_ = STATE_COMPLETED;
+        last_point_ = out_point;
+        has_last_point_ = true;
+        std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] Fallback succeeded" << std::endl;
+        return true;
+      }
+    }
   }
 
-  return found;
+  // 三次尝试都失败
+  state_ = STATE_UNREACHABLE;
+  std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] All attempts failed, marking as UNREACHABLE" << std::endl;
+  return false;
 }
 
 bool ChiselBox::searchWithCriteria(
@@ -237,6 +262,99 @@ bool ChiselBox::searchWithCriteria(
             << ", Filtered: " << filtered_by_height << "(height) + " << filtered_by_norm << "(norm) + "
             << filtered_by_curv << "(curv) + " << filtered_by_obstacle << "(obstacle) = "
             << (filtered_by_height + filtered_by_norm + filtered_by_curv + filtered_by_obstacle) << std::endl;
+  return false;
+}
+
+// [新增] 随机模式搜索（基于上一次点位或网格中心）
+bool ChiselBox::searchWithRandomMode(pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud,
+                                     pcl::PointCloud<pcl::PointXYZ>::Ptr obstacles,
+                                     pcl::PointXYZRGBNormal &result) {
+  if (cloud->empty()) return false;
+
+  // 确定基准点（上一次点位或网格中心）
+  pcl::PointXYZRGBNormal base_point;
+  if (has_last_point_) {
+    base_point = last_point_;
+    std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] Random mode: using last point as base" << std::endl;
+  } else {
+    // 使用网格中心作为基准点
+    base_point.x = param_.XMIN + col_ * param_.BOX_LEN + param_.BOX_LEN / 2.0f;
+    base_point.y = param_.YMIN + row_ * param_.BOX_LEN + param_.BOX_LEN / 2.0f;
+    base_point.z = 0.0f;  // Z坐标会在后面更新
+    base_point.normal_z = 1.0f;  // 默认法向垂直向上
+    std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] Random mode: using grid center as base" << std::endl;
+  }
+
+  // 生成随机偏移
+  float random_angle = ((float)rand() / RAND_MAX) * 2.0f * M_PI;  // 0-2π
+  float random_offset = ((float)rand() / RAND_MAX) * param_.RANDOM_OFFSET_RANGE;  // 0-RANDOM_OFFSET_RANGE
+
+  // 计算目标位置
+  float target_x = base_point.x + cos(random_angle) * random_offset;
+  float target_y = base_point.y + sin(random_angle) * random_offset;
+
+  // 在点云中寻找最接近目标位置的点
+  float min_dist = std::numeric_limits<float>::max();
+  int best_idx = -1;
+
+  for (size_t i = 0; i < cloud->size(); ++i) {
+    const auto &pt = cloud->points[i];
+
+    // 计算到目标位置的距离
+    float dist = std::sqrt(std::pow(pt.x - target_x, 2) + std::pow(pt.y - target_y, 2));
+
+    // 避障检查（简化版：只检查距离）
+    bool clash = false;
+    if (obstacles && !obstacles->empty()) {
+      for (const auto &obs : obstacles->points) {
+        float dx = pt.x - obs.x;
+        float dy = pt.y - obs.y;
+        if (dx * dx + dy * dy < param_.RELAXED_HOLE_DIST * param_.RELAXED_HOLE_DIST) {
+          clash = true;
+          break;
+        }
+      }
+    }
+    if (clash) continue;
+
+    // 选择最接近目标位置的点
+    if (dist < min_dist) {
+      min_dist = dist;
+      best_idx = i;
+    }
+  }
+
+  if (best_idx >= 0) {
+    result = cloud->points[best_idx];
+
+    // 随机旋转法向量
+    float norm_angle = ((float)rand() / RAND_MAX - 0.5f) * 2.0f * param_.RANDOM_ANGLE_RANGE;  // -RANDOM_ANGLE_RANGE 到 +RANDOM_ANGLE_RANGE
+    float cos_angle = cos(norm_angle);
+    float sin_angle = sin(norm_angle);
+
+    // 在XY平面旋转法向量
+    float new_normal_x = result.normal_x * cos_angle - result.normal_y * sin_angle;
+    float new_normal_y = result.normal_x * sin_angle + result.normal_y * cos_angle;
+    result.normal_x = new_normal_x;
+    result.normal_y = new_normal_y;
+
+    // 归一化法向量
+    float norm = std::sqrt(result.normal_x * result.normal_x +
+                           result.normal_y * result.normal_y +
+                           result.normal_z * result.normal_z);
+    if (norm > 0.001f) {
+      result.normal_x /= norm;
+      result.normal_y /= norm;
+      result.normal_z /= norm;
+    }
+
+    std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] Random mode found point at ("
+              << result.x << ", " << result.y << ", " << result.z << ") with normal ("
+              << result.normal_x << ", " << result.normal_y << ", " << result.normal_z << ")" << std::endl;
+    return true;
+  }
+
+  std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] Random mode failed: no point found near target" << std::endl;
   return false;
 }
 

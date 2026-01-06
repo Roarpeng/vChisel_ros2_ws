@@ -127,6 +127,10 @@ private:
     param_.TIP_CROP_RATIO = this->declare_parameter("TIP_CROP_RATIO", 0.25);
     param_.BASE_CROP_RATIO = this->declare_parameter("BASE_CROP_RATIO", 0.10);
 
+    // [新增] 读取随机模式参数
+    param_.RANDOM_OFFSET_RANGE = this->declare_parameter("RANDOM_OFFSET_RANGE", 0.02);
+    param_.RANDOM_ANGLE_RANGE = this->declare_parameter("RANDOM_ANGLE_RANGE", 0.35);
+
     // [新增] 读取平面面积阈值参数
     param_.PLANE_AREA_HIGH = this->declare_parameter("PLANE_AREA_HIGH", 0.00035);
     param_.PLANE_AREA_LOW = this->declare_parameter("PLANE_AREA_LOW", 0.00025);
