@@ -42,6 +42,15 @@ typedef struct {
   float PROTRUSION_TH;   // 判定为凸起的高度差阈值
   float TIP_CROP_RATIO;  // 切顶比例
   float BASE_CROP_RATIO; // 切底比例
+
+  // [新增] 平面面积阈值（平方米）
+  float PLANE_AREA_HIGH;  // 3.5cm² - 平面模式阈值
+  float PLANE_AREA_LOW;   // 2.5cm² - 凹凸面模式阈值
+
+  // [新增] 混合模式参数
+  float HYBRID_NORM_TH;   // 混合法向阈值
+  float HYBRID_HOLE_DIST; // 混合避障距离
+  float HYBRID_CURV_TH;   // 混合曲率阈值
 } ChiselParam;
 
 class ChiselBox {
@@ -69,6 +78,15 @@ private:
   int row_, col_;
   ChiselParam param_;
   BoxState state_;
+
+  // [新增] 搜索模式枚举
+  enum SearchMode { MODE_PLANE, MODE_HYBRID, MODE_PROTRUSION };
+
+  // [新增] 计算点云的凸包面积（平方米）
+  float calculateConvexHullArea(pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud);
+
+  // [新增] 根据面积确定搜索模式
+  SearchMode determineSearchMode(float area);
 
   // 内部通用搜索逻辑
   bool searchWithCriteria(pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud,

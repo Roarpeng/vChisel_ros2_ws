@@ -127,6 +127,13 @@ private:
     param_.TIP_CROP_RATIO = this->declare_parameter("TIP_CROP_RATIO", 0.25);
     param_.BASE_CROP_RATIO = this->declare_parameter("BASE_CROP_RATIO", 0.10);
 
+    // [新增] 读取平面面积阈值参数
+    param_.PLANE_AREA_HIGH = this->declare_parameter("PLANE_AREA_HIGH", 0.00035);
+    param_.PLANE_AREA_LOW = this->declare_parameter("PLANE_AREA_LOW", 0.00025);
+    param_.HYBRID_NORM_TH = this->declare_parameter("HYBRID_NORM_TH", 0.885);
+    param_.HYBRID_HOLE_DIST = this->declare_parameter("HYBRID_HOLE_DIST", 0.0425);
+    param_.HYBRID_CURV_TH = this->declare_parameter("HYBRID_CURV_TH", 0.085);
+
     // 读取手眼标定矩阵参数
     std::vector<double> row1 = this->declare_parameter(
       "hand_eye_calibration.row1",
@@ -437,6 +444,7 @@ private:
     pcl::PointCloud<pcl::PointXYZ>::Ptr vision_holes(
         new pcl::PointCloud<pcl::PointXYZ>);
     holeDetector(color_snap, depth_snap, info_snap, vision_holes);
+    RCLCPP_INFO(this->get_logger(), "[DEBUG] Detected %zu holes (obstacles)", vision_holes->size());
     *global_obstacles_ += *vision_holes;
 
     // 6. 预处理

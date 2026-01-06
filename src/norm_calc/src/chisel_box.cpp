@@ -1,6 +1,7 @@
 #include "norm_calc/chisel_box.h"
 #include <iostream>
 #include <limits>
+#include <pcl/surface/convex_hull.h>
 
 namespace chisel_box {
 
@@ -22,47 +23,57 @@ bool ChiselBox::findBestPoint(
   if (cloud_roi->empty())
     return false;
 
-  bool found = false;
+  // === 基于面积的平面优先策略 ===
 
-  // === 状态机核心逻辑 ===
+  // 第一步：计算点云的凸包面积
+  float area = calculateConvexHullArea(cloud_roi);
 
-  if (state_ == STATE_PENDING) {
-    // 【第一次尝试】：使用严格标准 (Strict Mode)
-    // 目标：只打最好的位置，宁缺毋滥
-    found = searchWithCriteria(cloud_roi, obstacles, param_.STRICT_NORM_TH,
-                               param_.STRICT_HOLE_DIST, param_.STRICT_CURV_TH,
-                               out_point);
-    if (found) {
-      state_ = STATE_COMPLETED; // 规划成功
-      return true;
-    } else {
-      state_ = STATE_SKIPPED_ONCE; // 没找到，标记跳过，等待下一轮
-      return false;
-    }
-  } else if (state_ == STATE_SKIPPED_ONCE) {
-    // 【第二次尝试】：
-    // 1. 先重试严格标准 (万一上次是因为遮挡或噪声没看见)
-    found = searchWithCriteria(cloud_roi, obstacles, param_.STRICT_NORM_TH,
-                               param_.STRICT_HOLE_DIST, param_.STRICT_CURV_TH,
-                               out_point);
+  // 第二步：根据面积确定搜索模式
+  SearchMode mode = determineSearchMode(area);
 
-    // 2. 如果还不行，降级使用宽松标准 (Relaxed Mode - 次优点)
-    if (!found) {
-      found = searchWithCriteria(cloud_roi, obstacles, param_.RELAXED_NORM_TH,
-                                 param_.RELAXED_HOLE_DIST,
-                                 param_.RELAXED_CURV_TH, out_point);
-    }
-
-    if (found) {
-      state_ = STATE_COMPLETED;
-      return true;
-    } else {
-      state_ = STATE_UNREACHABLE; // 彻底放弃该网格
-      return false;
-    }
+  // 第三步：根据模式选择参数
+  float norm_th, hole_dist, curv_th;
+  std::string mode_name;
+  switch (mode) {
+    case MODE_PLANE:
+      // 平面模式：严格标准
+      norm_th = param_.STRICT_NORM_TH;      // 0.90
+      hole_dist = param_.STRICT_HOLE_DIST;  // 0.05
+      curv_th = param_.STRICT_CURV_TH;      // 0.07
+      mode_name = "PLANE";
+      break;
+    case MODE_HYBRID:
+      // 混合模式：使用中间值
+      norm_th = param_.HYBRID_NORM_TH;      // 0.885
+      hole_dist = param_.HYBRID_HOLE_DIST;  // 0.0425
+      curv_th = param_.HYBRID_CURV_TH;      // 0.085
+      mode_name = "HYBRID";
+      break;
+    case MODE_PROTRUSION:
+      // 凹凸面模式：宽松标准
+      norm_th = param_.RELAXED_NORM_TH;     // 0.87
+      hole_dist = param_.RELAXED_HOLE_DIST; // 0.035
+      curv_th = param_.RELAXED_CURV_TH;     // 0.10
+      mode_name = "PROTRUSION";
+      break;
   }
 
-  return false;
+  std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] Mode: " << mode_name
+            << " (norm_th: " << norm_th << ", hole_dist: " << hole_dist << ", curv_th: " << curv_th << ")" << std::endl;
+
+  // 第四步：执行搜索
+  bool found = searchWithCriteria(cloud_roi, obstacles,
+                                 norm_th, hole_dist, curv_th,
+                                 out_point);
+
+  // 第五步：更新状态
+  if (found) {
+    state_ = STATE_COMPLETED;
+  } else {
+    state_ = STATE_UNREACHABLE;
+  }
+
+  return found;
 }
 
 bool ChiselBox::searchWithCriteria(
@@ -93,11 +104,14 @@ bool ChiselBox::searchWithCriteria(
   float avg_z = z_sum / cloud->size();
   float avg_curv = curv_sum / cloud->size();
 
-  // 改进的凸起检测：结合高度差和曲率
-  // 1. 高度差超过阈值（传统凸起）
-  // 2. 或者高度差适中但曲率较高（平坦凸起的边缘）
-  bool is_protrusion = (z_range > param_.PROTRUSION_TH) ||
-                       (z_range > param_.PROTRUSION_TH * 0.5f && avg_curv > 0.05f);
+  // 改进的凸起检测：主要基于曲率，高度差作为辅助条件
+  // 1. 曲率超过阈值（主要判定：曲面/凸起）
+  // 2. 或者曲率适中但高度差很大（辅助判定：明显凸起）
+  bool is_protrusion = (avg_curv > 0.02) ||  // 平均曲率 > 0.02，判定为曲面
+                       (avg_curv > 0.01 && z_range > param_.PROTRUSION_TH);  // 曲率适中但高度差 > 3cm
+
+  std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] Z-range: " << z_range * 1000.0f << "mm, Avg-curv: " << avg_curv
+            << ", Is-protrusion: " << (is_protrusion ? "YES" : "NO") << std::endl;
 
   // 定义有效的高度区间 [valid_z_min, valid_z_max]
   float valid_z_min = z_min;
@@ -126,6 +140,12 @@ bool ChiselBox::searchWithCriteria(
   int best_idx = -1;
   float dist_sq_th = hole_dist_th * hole_dist_th;
 
+  // 调试统计
+  int filtered_by_height = 0;
+  int filtered_by_norm = 0;
+  int filtered_by_curv = 0;
+  int filtered_by_obstacle = 0;
+
   // 网格中心 (用于 Center Weight)
   float cx = param_.XMIN + col_ * param_.BOX_LEN + param_.BOX_LEN / 2.0f;
   float cy = param_.YMIN + row_ * param_.BOX_LEN + param_.BOX_LEN / 2.0f;
@@ -136,16 +156,22 @@ bool ChiselBox::searchWithCriteria(
     // --- 1. 几何过滤 (Geometry Filter) ---
 
     // [新增] 高度区间过滤：如果是凸起，直接丢弃顶部和底部的点
-    if (pt.z > valid_z_max || pt.z < valid_z_min)
+    if (pt.z > valid_z_max || pt.z < valid_z_min) {
+      filtered_by_height++;
       continue;
+    }
 
     // 法向约束
-    if (std::abs(pt.normal_z) < norm_th)
+    if (std::abs(pt.normal_z) < norm_th) {
+      filtered_by_norm++;
       continue;
+    }
 
     // 曲率约束
-    if (pt.curvature > curv_th)
+    if (pt.curvature > curv_th) {
+      filtered_by_curv++;
       continue;
+    }
 
     // --- 2. 避障过滤 (Obstacle Filter) ---
     bool clash = false;
@@ -159,8 +185,10 @@ bool ChiselBox::searchWithCriteria(
         }
       }
     }
-    if (clash)
+    if (clash) {
+      filtered_by_obstacle++;
       continue;
+    }
 
     // --- 3. 智能评分 (Scoring) ---
     float dist_center =
@@ -198,9 +226,71 @@ bool ChiselBox::searchWithCriteria(
 
   if (best_idx >= 0) {
     result = cloud->points[best_idx];
+    std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] Found point! Total: " << cloud->size()
+              << ", Filtered: " << filtered_by_height << "(height) + " << filtered_by_norm << "(norm) + "
+              << filtered_by_curv << "(curv) + " << filtered_by_obstacle << "(obstacle) = "
+              << (filtered_by_height + filtered_by_norm + filtered_by_curv + filtered_by_obstacle) << std::endl;
     return true;
   }
+
+  std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] No point found! Total: " << cloud->size()
+            << ", Filtered: " << filtered_by_height << "(height) + " << filtered_by_norm << "(norm) + "
+            << filtered_by_curv << "(curv) + " << filtered_by_obstacle << "(obstacle) = "
+            << (filtered_by_height + filtered_by_norm + filtered_by_curv + filtered_by_obstacle) << std::endl;
   return false;
+}
+
+// [新增] 计算点云的凸包面积（平方米）
+float ChiselBox::calculateConvexHullArea(pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud) {
+  if (cloud->empty() || cloud->size() < 3) {
+    std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] Area: 0.0 (points: " << cloud->size() << ")" << std::endl;
+    return 0.0f;
+  }
+
+  // 投影到XY平面
+  pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_2d(new pcl::PointCloud<pcl::PointXYZ>);
+  cloud_2d->resize(cloud->size());
+  for (size_t i = 0; i < cloud->size(); ++i) {
+    cloud_2d->points[i].x = cloud->points[i].x;
+    cloud_2d->points[i].y = cloud->points[i].y;
+    cloud_2d->points[i].z = 0.0f;
+  }
+
+  // 计算凸包
+  pcl::ConvexHull<pcl::PointXYZ> chull;
+  chull.setInputCloud(cloud_2d);
+  pcl::PointCloud<pcl::PointXYZ>::Ptr hull_points(new pcl::PointCloud<pcl::PointXYZ>);
+  chull.reconstruct(*hull_points);
+
+  // 计算凸包面积（使用鞋带公式）
+  if (hull_points->size() < 3) {
+    return 0.0f;
+  }
+
+  float total_area = 0.0f;
+  for (size_t i = 0; i < hull_points->size(); ++i) {
+    size_t j = (i + 1) % hull_points->size();
+    total_area += hull_points->points[i].x * hull_points->points[j].y;
+    total_area -= hull_points->points[j].x * hull_points->points[i].y;
+  }
+
+  float area = std::abs(total_area) / 2.0f;
+  std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] Area: " << area * 10000.0f << " cm² (points: " << cloud->size() << ")" << std::endl;
+  return area;
+}
+
+// [新增] 根据面积确定搜索模式
+ChiselBox::SearchMode ChiselBox::determineSearchMode(float area) {
+  const float PLANE_AREA_HIGH = param_.PLANE_AREA_HIGH;  // 0.00035 m² (3.5cm²)
+  const float PLANE_AREA_LOW = param_.PLANE_AREA_LOW;   // 0.00025 m² (2.5cm²)
+
+  if (area >= PLANE_AREA_HIGH) {
+    return MODE_PLANE;
+  } else if (area >= PLANE_AREA_LOW) {
+    return MODE_HYBRID;
+  } else {
+    return MODE_PROTRUSION;
+  }
 }
 
 } // namespace chisel_box
