@@ -415,6 +415,7 @@ private:
     {
       cv_bridge::CvImage cv_img;
       cv_img.header = info_snap.header;
+      cv_img.header.stamp = this->get_clock()->now();  // 更新时间戳以同步可视化
       cv_img.encoding = "rgb8";
       cv_img.image = color_snap;
       pub_captured_image_->publish(*cv_img.toImageMsg());
@@ -500,9 +501,33 @@ private:
       }
     }
 
-    // 9. 检查点位数量，如果不足网格总数的50%，触发宽松模式
+    // 9. 检查点位数量，动态调整权重和触发宽松模式
     int min_points_threshold = (int)(grids_.size() * 0.5);
+    int critical_threshold = 8;  // 关键阈值：8个点
+
     if (plan_count < min_points_threshold) {
+      // 动态调整权重因子
+      float weight_factor = 1.0f;
+      if (plan_count < critical_threshold) {
+        // 点数少于8，大幅降低权重要求
+        weight_factor = 0.5f;
+        RCLCPP_ERROR(this->get_logger(),
+                     "CRITICAL: Only %d points found (< %d), reducing weights by 50%%",
+                     plan_count, critical_threshold);
+      } else {
+        // 点数在8-12之间，适度降低权重
+        weight_factor = 0.7f;
+        RCLCPP_WARN(this->get_logger(),
+                    "Strict mode only found %d points (< %d), reducing weights by 30%%",
+                    plan_count, min_points_threshold);
+      }
+
+      // 临时调整参数
+      float original_angle_weight = param_.ANGLE_WEIGHT;
+      float original_center_weight = param_.CENTER_WEIGHT;
+      param_.ANGLE_WEIGHT *= weight_factor;
+      param_.CENTER_WEIGHT *= weight_factor;
+
       RCLCPP_WARN(this->get_logger(),
                   "Strict mode only found %d points (< %d), triggering relaxed mode for skipped grids...",
                   plan_count, min_points_threshold);
@@ -545,6 +570,10 @@ private:
           }
         }
       }
+
+      // 恢复原始权重
+      param_.ANGLE_WEIGHT = original_angle_weight;
+      param_.CENTER_WEIGHT = original_center_weight;
 
       RCLCPP_INFO(this->get_logger(),
                   "Relaxed mode found %d additional points, total: %d",

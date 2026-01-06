@@ -73,20 +73,31 @@ bool ChiselBox::searchWithCriteria(
     return false;
 
   // ==========================================
-  // 第一步：拓扑分析 (计算 Z 范围)
+  // 第一步：拓扑分析 (计算 Z 范围和平均曲率)
   // ==========================================
   float z_min = std::numeric_limits<float>::max();
   float z_max = -std::numeric_limits<float>::max();
+  float z_sum = 0.0f;
+  float curv_sum = 0.0f;
 
   for (const auto &pt : cloud->points) {
     if (pt.z < z_min)
       z_min = pt.z;
     if (pt.z > z_max)
       z_max = pt.z;
+    z_sum += pt.z;
+    curv_sum += pt.curvature;
   }
 
   float z_range = z_max - z_min;
-  bool is_protrusion = (z_range > param_.PROTRUSION_TH); // 是否为凸起
+  float avg_z = z_sum / cloud->size();
+  float avg_curv = curv_sum / cloud->size();
+
+  // 改进的凸起检测：结合高度差和曲率
+  // 1. 高度差超过阈值（传统凸起）
+  // 2. 或者高度差适中但曲率较高（平坦凸起的边缘）
+  bool is_protrusion = (z_range > param_.PROTRUSION_TH) ||
+                       (z_range > param_.PROTRUSION_TH * 0.5f && avg_curv > 0.05f);
 
   // 定义有效的高度区间 [valid_z_min, valid_z_max]
   float valid_z_min = z_min;
