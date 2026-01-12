@@ -228,10 +228,11 @@ bool ChiselBox::searchWithCriteria(
 
       // 2. 弱化高度权重：既然已经切顶了，剩下的区间里，高度没那么重要了
       // 只要在区间内，主要看是否好下刀
-      score += param_.HEIGHT_WEIGHT * pt.z * 0.5f;
+      // score += param_.HEIGHT_WEIGHT * pt.z * 0.5f;
+      score += param_.HEIGHT_WEIGHT * pt.z*1.5f;
 
       // 3. 极度强调法向垂直度：半山腰下刀，必须保证不滑
-      score += param_.ANGLE_WEIGHT * std::abs(pt.normal_z) * 1.5f;
+      score += param_.ANGLE_WEIGHT * std::abs(pt.normal_z) * 1.0f;
     } else {
       // 【平面策略评分】 (原有逻辑)
       // 优先打稍微凸起一点的地方（好破碎）

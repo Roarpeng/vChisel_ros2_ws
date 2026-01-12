@@ -1,0 +1,116 @@
+{
+  "layoutId": "vchisel-visualization-layout",
+  "name": "vChisel ROS2 可视化布局",
+  "description": "用于vChisel点云处理系统的Foxglove可视化布局",
+  "version": 1,
+  "panels": [
+    {
+      "id": "camera-image",
+      "name": "摄像头图像",
+      "type": "Image",
+      "config": {
+        "cameraTopic": "/captured_image",
+        "imageMode": "fit",
+        "scale": 1.0,
+        "showLabels": true,
+        "synchronize": false
+      },
+      "configByName": {
+        "topicPath": "/captured_image"
+      }
+    },
+    {
+      "id": "3d-pointcloud",
+      "name": "3D点云和法向点",
+      "type": "3D",
+      "config": {
+        "topics": [
+          {
+            "name": "processed_cloud",
+            "topic": "/debug_processed_cloud",
+            "colorMode": {
+              "colorMode": "rgb"
+            },
+            "pointSize": 3,
+            "decayTime": 0
+          },
+          {
+            "name": "norm_points",
+            "topic": "/visual_norm_result",
+            "colorMode": {
+              "colorMode": "rgba",
+              "r": 0.0,
+              "g": 1.0,
+              "b": 0.0,
+              "a": 1.0
+            },
+            "pointSize": 8,
+            "decayTime": 0
+          }
+        ],
+        "cameraState": {
+          "distance": 1.5,
+          "perspective": true,
+          "phi": 1.5707963267948966,
+          "thetaOffset": -1.5707963267948966,
+          "target": [
+            0,
+            0,
+            0.5
+          ],
+          "targetOrientation": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "focalLength": 400,
+          "near": 0.01,
+          "far": 5000
+        },
+        "upAxis": "z",
+        "followTf": "camera_link"
+      }
+    },
+    {
+      "id": "parameters",
+      "name": "参数配置",
+      "type": "Parameters",
+      "config": {
+        "expandedNodes": [
+          "/norm_calc"
+        ]
+      }
+    },
+    {
+      "id": "topic-graph",
+      "name": "话题图",
+      "type": "TopicGraph",
+      "config": {
+        "highlightedTopics": [],
+        "selectedNodes": []
+      }
+    },
+    {
+      "id": "log",
+      "name": "系统日志",
+      "type": "Log",
+      "config": {
+        "minLogLevel": "info",
+        "splitDirection": "horizontal"
+      }
+    }
+  ],
+  "globalVariables": {},
+  "userNodes": {},
+  "playbackConfig": {
+    "speed": 1
+  },
+  "dataSources": [
+    {
+      "id": "ros2-connection",
+      "name": "ROS2 Connection",
+      "type": "ros2-native"
+    }
+  ]
+}

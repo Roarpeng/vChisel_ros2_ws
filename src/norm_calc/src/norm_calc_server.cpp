@@ -12,14 +12,27 @@
 #include <mutex>
 #include <pcl_conversions/pcl_conversions.h>
 #include <thread>
+#include <chrono>
+#include <iomanip>
+#include <sstream>
+#include <ctime>
 
 using std::placeholders::_1;
 using std::placeholders::_2;
 
+// 获取本地时间字符串
+std::string getLocalTimeString() {
+  auto now = std::chrono::system_clock::now();
+  auto in_time_t = std::chrono::system_clock::to_time_t(now);
+  std::stringstream ss;
+  ss << std::put_time(std::localtime(&in_time_t), "%Y-%m-%d %H:%M:%S");
+  return ss.str();
+}
+
 class NormCalcServer : public rclcpp::Node {
 public:
   NormCalcServer() : Node("norm_calc_server") {
-    RCLCPP_INFO(this->get_logger(), "=== NormCalc Server Starting ===");
+    RCLCPP_INFO(this->get_logger(), "[%s] === NormCalc Server Starting ===", getLocalTimeString().c_str());
 
     readParameters();
     initGrids();
@@ -359,7 +372,7 @@ private:
   void handleService(
       const std::shared_ptr<norm_calc::srv::NormCalcData::Request> req,
       std::shared_ptr<norm_calc::srv::NormCalcData::Response> res) {
-    RCLCPP_INFO(this->get_logger(), ">>> Processing Request Seq: %d", req->seq);
+    RCLCPP_INFO(this->get_logger(), "[%s] >>> Processing Request Seq: %d", getLocalTimeString().c_str(), req->seq);
 
     // 【修改点】智能状态重置
     // 只重置 STATE_COMPLETED 的网格，保留 STATE_SKIPPED_ONCE 的状态
@@ -377,9 +390,13 @@ private:
     if (pending_count == (int)grids_.size()) {
       for (auto &grid : grids_)
         grid->reset();
-      RCLCPP_INFO(this->get_logger(), "State Reset: All grids PENDING (first run).");
+      RCLCPP_INFO(this->get_logger(),
+                "[%s] State Reset: All grids PENDING (first run).",
+                getLocalTimeString().c_str());
     } else {
-      RCLCPP_INFO(this->get_logger(), "State Reset: Only COMPLETED grids reset, SKIPPED grids kept for relaxed mode.");
+      RCLCPP_INFO(this->get_logger(),
+                "[%s] State Reset: Only COMPLETED grids reset, SKIPPED grids kept for relaxed mode.",
+                getLocalTimeString().c_str());
     }
 
     global_obstacles_->clear();
@@ -388,13 +405,17 @@ private:
       for (auto &grid : grids_)
         grid->reset();
       global_obstacles_->clear();
-      RCLCPP_INFO(this->get_logger(), "State Reset: All grids PENDING (seq=0).");
+      RCLCPP_INFO(this->get_logger(),
+                "[%s] State Reset: All grids PENDING (seq=0).",
+                getLocalTimeString().c_str());
     }
 
     // 1. 等待数据
     {
       int wait_cnt = 0;
-      RCLCPP_INFO(this->get_logger(), "Waiting for camera data...");
+      RCLCPP_INFO(this->get_logger(),
+                "[%s] Waiting for camera data...",
+                getLocalTimeString().c_str());
       while (wait_cnt < 30) {
         {
           std::lock_guard<std::mutex> lock(data_mutex_);
@@ -412,7 +433,9 @@ private:
     {
       std::lock_guard<std::mutex> lock(data_mutex_);
       if (!img_ready_ || !depth_ready_ || !info_ready_) {
-        RCLCPP_ERROR(this->get_logger(), "TIMEOUT: Camera data not ready!");
+        RCLCPP_ERROR(this->get_logger(),
+                "[%s] TIMEOUT: Camera data not ready!",
+                getLocalTimeString().c_str());
         return;
       }
       color_snap = img_color_.clone();
@@ -420,7 +443,7 @@ private:
       info_snap = cam_info_;
       img_ready_ = depth_ready_ = false;
     }
-    RCLCPP_INFO(this->get_logger(), "Data Acquired. Generating Cloud...");
+    RCLCPP_INFO(this->get_logger(), "[%s] Data Acquired. Generating Cloud...", getLocalTimeString().c_str());
 
     // 3. 【恢复发布】发布原始图像给 Viewer
     {
@@ -438,9 +461,9 @@ private:
     generateRawPointCloud(color_snap, depth_snap, info_snap, raw_cloud);
 
     if (raw_cloud->empty()) {
-      RCLCPP_WARN(
-          this->get_logger(),
-          "Generated raw cloud is empty. Check Z range or depth image.");
+      RCLCPP_WARN(this->get_logger(),
+                      "[%s] Generated raw cloud is empty. Check Z range or depth image.",
+                      getLocalTimeString().c_str());
       return;
     }
 
@@ -448,7 +471,7 @@ private:
     pcl::PointCloud<pcl::PointXYZ>::Ptr vision_holes(
         new pcl::PointCloud<pcl::PointXYZ>);
     holeDetector(color_snap, depth_snap, info_snap, vision_holes);
-    RCLCPP_INFO(this->get_logger(), "[DEBUG] Detected %zu holes (obstacles)", vision_holes->size());
+    RCLCPP_INFO(this->get_logger(), "[%s] [DEBUG] Detected %zu holes (obstacles)", getLocalTimeString().c_str(), vision_holes->size());
     *global_obstacles_ += *vision_holes;
 
     // 6. 预处理
@@ -460,8 +483,10 @@ private:
         param_.YMAX + border_w_, z_min_, z_max_, search_r_, search_n_);
 
     if (!ok) {
-      RCLCPP_WARN(this->get_logger(),
-                  "Processed cloud empty (filtered out). Check ROI params.");
+      RCLCPP_WARN(
+          this->get_logger(),
+          "[%s] Processed cloud empty (filtered out). Check ROI params.",
+          getLocalTimeString().c_str());
       return;
     }
 
@@ -524,9 +549,8 @@ private:
         // 点数少于8，大幅降低权重要求
         weight_factor = 0.5f;
         RCLCPP_ERROR(this->get_logger(),
-                     "CRITICAL: Only %d points found (< %d), reducing weights by 50%%",
-                     plan_count, critical_threshold);
-      } else {
+                        "[%s] CRITICAL: Only %d points found (< %d), reducing weights by 50%%",
+                        getLocalTimeString().c_str(), plan_count, critical_threshold);      } else {
         // 点数在8-12之间，适度降低权重
         weight_factor = 0.7f;
         RCLCPP_WARN(this->get_logger(),
@@ -541,9 +565,8 @@ private:
       param_.CENTER_WEIGHT *= weight_factor;
 
       RCLCPP_WARN(this->get_logger(),
-                  "Strict mode only found %d points (< %d), triggering relaxed mode for skipped grids...",
-                  plan_count, min_points_threshold);
-
+                      "[%s] Strict mode only found %d points (< %d), triggering relaxed mode for skipped grids...",
+                      getLocalTimeString().c_str(), plan_count, min_points_threshold);
       int relaxed_count = 0;
       for (auto &grid : grids_) {
         if (grid->getState() == chisel_box::STATE_SKIPPED_ONCE) {
@@ -588,9 +611,8 @@ private:
       param_.CENTER_WEIGHT = original_center_weight;
 
       RCLCPP_INFO(this->get_logger(),
-                  "Relaxed mode found %d additional points, total: %d",
-                  relaxed_count, plan_count);
-    }
+                      "[%s] Relaxed mode found %d additional points, total: %d",
+                      getLocalTimeString().c_str(), relaxed_count, plan_count);    }
 
     res->pose_list.header.stamp = this->get_clock()->now();
     res->pose_list.header.frame_id = info_snap.header.frame_id;
@@ -598,8 +620,11 @@ private:
     // 【恢复发布】发布可视化结果
     pub_visual_norm_->publish(visual_poses);
 
-    RCLCPP_INFO(this->get_logger(), "<<< Analysis Done. Planned %d points.",
-                plan_count);
+    RCLCPP_INFO(this->get_logger(),
+
+                    "[%s] <<< Analysis Done. Planned %d points.",
+
+                    getLocalTimeString().c_str(), plan_count);
   }
 };
 
