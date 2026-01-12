@@ -1,22 +1,18 @@
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument, RegisterEventHandler
+from launch.actions import DeclareLaunchArgument
 from launch.conditions import IfCondition
-from launch.event_handlers import OnProcessExit
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, PythonExpression
-from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
-import os
 
 def generate_launch_description():
     """
-    完整系统启动文件（集成Foxglove可视化）
-    包含：norm_calc服务、PLC客户端、相机监控、RealSense相机、Foxglove Bridge
+    系统启动文件（不包含RealSense相机）
+    包含：norm_calc服务、PLC客户端、相机监控、Foxglove Bridge
     """
     
     # 获取包路径
     norm_calc_pkg_share = FindPackageShare(package='norm_calc').find('norm_calc')
-    snap_7_pkg_share = FindPackageShare(package='snap_7').find('snap_7')
     
     # 获取参数文件路径
     params_file = PathJoinSubstitution([norm_calc_pkg_share, 'config', 'norm_calc_params.yaml'])
@@ -34,6 +30,18 @@ def generate_launch_description():
         description='Foxglove WebSocket端口'
     )
     
+    plc_enabled_arg = DeclareLaunchArgument(
+        'plc_enabled',
+        default_value='true',
+        description='是否启用PLC客户端'
+    )
+    
+    camera_monitor_enabled_arg = DeclareLaunchArgument(
+        'camera_monitor_enabled',
+        default_value='true',
+        description='是否启用相机监控'
+    )
+    
     # ==================== 核心节点 ====================
     
     # 1. norm_calc服务节点
@@ -45,11 +53,12 @@ def generate_launch_description():
         parameters=[params_file]
     )
     
-    # 2. PLC客户端节点
+    # 2. PLC客户端节点（可选）
     plc_client_node = Node(
         package='snap_7',
         executable='snap_7_node',
         name='plc_client_node',
+        condition=IfCondition(PythonExpression(["'", LaunchConfiguration('plc_enabled'), "' == 'true'"])),
         output='screen',
         emulate_tty=True,
         parameters=[
@@ -62,11 +71,12 @@ def generate_launch_description():
         ]
     )
     
-    # 3. 相机监控节点
+    # 3. 相机监控节点（可选）
     camera_monitor_node = Node(
         package='snap_7',
         executable='camera_monitor',
         name='camera_monitor',
+        condition=IfCondition(PythonExpression(["'", LaunchConfiguration('camera_monitor_enabled'), "' == 'true'"])),
         output='screen',
         parameters=[
             {'timeout_seconds': 5.0},
@@ -75,41 +85,7 @@ def generate_launch_description():
         ]
     )
     
-    # 4. RealSense相机节点
-    realsense_node = Node(
-        package='realsense2_camera',
-        executable='realsense2_camera_node',
-        name='realsense2_camera',
-        output='screen',
-        parameters=[{
-            'enable_color': True,
-            'enable_depth': True,
-            'enable_infra': False,
-            'enable_infra1': False,
-            'enable_infra2': False,
-            'enable_sync': True,
-            'align_depth': True,
-            'depth_module.profile': '640x480x6',
-            'rgb_camera.profile': '640x480x6',
-            'color_width': 640,
-            'color_height': 480,
-            'color_fps': 6.0,
-            'depth_fps': 6.0,
-            'initial_reset': True,
-            'enable_pointcloud': False,
-            'pointcloud_texture_stream': 'RS2_STREAM_COLOR',
-            'pointcloud_texture_index': 0,
-            'allow_no_texture_points': False,
-            'ordered_pc': False,
-            'clip_distance': 2.0,
-            'linear_accel_cov': 0.0,
-            'angular_velocity_cov': 0.0,
-            'hold_back_imu_for_frames': 1,
-            'reconnect_timeout': 6.0,
-        }]
-    )
-    
-    # 5. Foxglove Bridge节点（可选）
+    # 4. Foxglove Bridge节点（可选）
     foxglove_bridge_node = Node(
         package='foxglove_bridge',
         executable='foxglove_bridge',
@@ -119,22 +95,23 @@ def generate_launch_description():
         parameters=[{
             'port': LaunchConfiguration('foxglove_port'),
             'address': '0.0.0.0',
-            'topics': '[]',  # 订阅所有话题
+            'topics': '[]',
             'tls': False,
             'max_update_ms': 100,
             'num_threads': 4,
         }]
     )
     
-    # ==================== 启动顺序控制 ====================
+    # ==================== 返回启动描述 ====================
     
     return LaunchDescription([
         # 启动参数
         foxglove_enabled_arg,
         foxglove_port_arg,
+        plc_enabled_arg,
+        camera_monitor_enabled_arg,
         
-        # 核心节点（按顺序启动）
-        realsense_node,
+        # 核心节点
         norm_calc_node,
         plc_client_node,
         camera_monitor_node,
