@@ -1195,3 +1195,105 @@ ros2 topic echo /visual_norm_result --once
 - 支持数据录制和回放（MCAP格式）
 - 支持远程监控（SSH隧道）
 - 自定义Marker可视化（网格线、坐标轴、文本标注）
+
+---
+
+### 2026-01-13 - 法向点计算深度优化与可视化修复
+
+#### 1. AGENTS.md 知识库文档生成
+- ✅ 创建层次化知识库文件：
+  - `./AGENTS.md` (根目录)
+  - `./src/norm_calc/AGENTS.md`
+  - `./src/snap_7/AGENTS.md`
+  - `./src/hand_eye_calib/AGENTS.md`
+  - `./src/vision_opencv/AGENTS.md`
+
+#### 2. 法向点计算算法优化
+
+**2.1 关键Bug修复** (`src/norm_calc/src/chisel_box.cpp`)
+- **问题**: 随机模式使用 `random_angle` 生成虚假法向量，对机器人操作有潜在危险
+- **修复**: 现在在接受任何点之前验证真实的几何法向量
+
+**2.2 性能优化** (`src/norm_calc/src/norm_calc.cpp`)
+- 将 `pcl::NormalEstimation` 替换为 `pcl::NormalEstimationOMP`（多线程）
+- 添加**双尺度边缘检测**：在2.5cm和5.0cm半径计算法向量，拒绝差异>20°的点（边缘/裂缝）
+
+**2.3 参数调优** (`src/norm_calc/config/norm_calc_params.yaml`)
+```yaml
+SEARCH_RADIUS: 0.025      # 原 0.02
+SEARCH_NUM_TH: 30         # 原 20
+STRICT_CURV_TH: 0.05      # 原 0.08
+HEIGHT_WEIGHT: 0.0        # 原 1.0（垂直墙面禁用高度权重）
+CURV_WEIGHT: 10.0         # 原 5.0
+ANGLE_WEIGHT: 20.0        # 原 15.0
+```
+
+#### 3. 自定义 RealSense SDK 节点
+
+用户直接使用 `pyrealsense2` SDK，不使用 ROS 包。
+
+**新增文件**: `src/snap_7/snap_7/custom_realsense_node.py`
+- 直接SDK集成，绕过 `realsense2_camera` ROS包
+- 内置滤波器链，针对静态拍摄优化：
+  - 孔洞填充 (Hole Filling)
+  - 空间滤波 (Spatial Filter)
+  - 时域滤波 (Temporal Filter) - 静态拍摄关键
+- 发布到相同的ROS话题保持兼容性
+
+**修改文件**:
+- `src/snap_7/snap_7/plc_client_node.py` - 修改相机启动命令
+- `src/snap_7/snap_7/camera_monitor.py` - 同上
+- `src/snap_7/setup.py` - 添加入口点
+
+#### 4. NumPy/cv_bridge 版本冲突修复
+
+**问题**: 相机节点崩溃，`Exit Code 1`，由于NumPy 2.x与ROS 2 Humble的cv_bridge不兼容
+
+**解决方案**:
+```bash
+pip install "numpy<2.0"           # 降级到 1.26.4
+pip install "opencv-python<4.10"  # 匹配opencv版本
+```
+
+在 `custom_realsense_node.py` 中添加 `sys.path` 操作，优先使用ROS系统包。
+
+创建 `TROUBLESHOOTING.md` 文档记录此问题。
+
+#### 5. 可视化话题不匹配修复
+
+**问题**: 可视化窗口只显示拍摄图像，法向点和网格不显示
+
+**根本原因**: `image_norm_viewer.cpp` 订阅的camera_info话题与系统实际使用的不一致：
+
+| 组件 | 话题 (修复前) | 话题 (修复后) |
+|------|--------------|--------------|
+| `norm_calc_server` | `camera/camera/aligned_depth_to_color/camera_info` | - |
+| `image_norm_viewer` | `camera/camera/depth/camera_info` ❌ | `camera/camera/aligned_depth_to_color/camera_info` ✅ |
+
+**修复**: 修改 `src/norm_calc/src/image_norm_viewer.cpp` 第28-32行
+
+#### 本次会话修改的文件
+```
+src/norm_calc/src/chisel_box.cpp          # 修复随机模式虚假法向Bug
+src/norm_calc/src/norm_calc.cpp           # 添加OMP + 双尺度边缘检测
+src/norm_calc/src/norm_calc_server.cpp    # 修复参数同步Bug
+src/norm_calc/src/image_norm_viewer.cpp   # 修复camera_info话题
+src/norm_calc/include/norm_calc/chisel_box.h  # 添加updateParams()
+src/norm_calc/config/norm_calc_params.yaml # 调优垂直混凝土参数
+src/snap_7/snap_7/custom_realsense_node.py  # 新增 - SDK直接集成
+src/snap_7/snap_7/plc_client_node.py      # 修改相机启动命令
+src/snap_7/snap_7/camera_monitor.py       # 修改相机启动命令
+src/snap_7/setup.py                       # 添加入口点
+./AGENTS.md + subdirs                     # 新增 - 知识库文档
+./TROUBLESHOOTING.md                      # 新增 - NumPy修复文档
+./iflow.md                                # 新增 - 会话总结（小写）
+```
+
+#### 构建状态
+- ✅ `norm_calc` 包编译成功
+- ✅ `snap_7` 包编译成功
+
+#### 下一步
+1. 重启系统验证可视化功能
+2. 测试边缘检测和新参数在真实混凝土凿击场景
+3. 验证位姿正确写入PLC

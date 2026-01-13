@@ -11,170 +11,164 @@ import subprocess
 import threading
 import time
 from std_msgs.msg import Bool
-import pyrealsense2 as rs
+
+# 注意：不再使用 pyrealsense2 检测设备，改用 lsusb 避免资源竞争
 import sys
 import os
 
 
 class CameraMonitor(Node):
     def __init__(self):
-        super().__init__('camera_monitor')
-        
+        super().__init__("camera_monitor")
+
         # Camera status tracking
         self.camera_process = None
         self.camera_running = False
         self.last_image_time = None
         self.last_camera_info_time = None
-        
+
         # Parameters
-        self.declare_parameter('timeout_seconds', 3.0)  # 秒数后认为相机无响应
-        self.declare_parameter('reconnect_attempts', 5)  # 重连尝试次数
-        self.declare_parameter('reconnect_delay', 2.0)  # 重连延迟（秒）
-        
-        self.timeout_seconds = self.get_parameter('timeout_seconds').get_parameter_value().double_value
-        self.reconnect_attempts = self.get_parameter('reconnect_attempts').get_parameter_value().integer_value
-        self.reconnect_delay = self.get_parameter('reconnect_delay').get_parameter_value().double_value
-        
+        self.declare_parameter("timeout_seconds", 3.0)  # 秒数后认为相机无响应
+        self.declare_parameter("reconnect_attempts", 5)  # 重连尝试次数
+        self.declare_parameter("reconnect_delay", 2.0)  # 重连延迟（秒）
+
+        self.timeout_seconds = (
+            self.get_parameter("timeout_seconds").get_parameter_value().double_value
+        )
+        self.reconnect_attempts = (
+            self.get_parameter("reconnect_attempts").get_parameter_value().integer_value
+        )
+        self.reconnect_delay = (
+            self.get_parameter("reconnect_delay").get_parameter_value().double_value
+        )
+
         # 连接尝试计数器
         self.connection_attempts = 0
-        
+
+        # 物理设备连接状态缓存（避免频繁检测导致资源竞争）
+        self.physical_device_connected = False
+
         # Subscribe to camera topics to monitor data flow
         self.image_sub = self.create_subscription(
-            Image, 
-            '/camera/camera/color/image_raw', 
-            self.image_callback, 
-            10
+            Image, "/camera/camera/color/image_raw", self.image_callback, 10
         )
-        
+
         self.camera_info_sub = self.create_subscription(
             CameraInfo,
-            '/camera/camera/depth/camera_info',
+            "/camera/camera/depth/camera_info",
             self.camera_info_callback,
-            10
+            10,
         )
-        
+
         # Publisher for camera status
-        self.camera_status_pub = self.create_publisher(Bool, 'camera_status', 10)
-        
+        self.camera_status_pub = self.create_publisher(Bool, "camera_status", 10)
+
         # Timer for monitoring
-        self.monitor_timer = self.create_timer(0.5, self.monitor_callback)  # 更频繁的监控
-        
+        self.monitor_timer = self.create_timer(
+            0.5, self.monitor_callback
+        )  # 更频繁的监控
+
         # Timer for physical device check
-        self.device_check_timer = self.create_timer(2.0, self.check_physical_device)  # 更频繁的物理检测
-        
-        self.get_logger().info('Camera monitor initialized')
-    
+        self.device_check_timer = self.create_timer(
+            2.0, self.check_physical_device
+        )  # 更频繁的物理检测
+
+        self.get_logger().info("Camera monitor initialized")
+
     def image_callback(self, msg):
         """处理图像数据到达"""
         self.last_image_time = self.get_clock().now()
-    
+
     def camera_info_callback(self, msg):
         """处理相机信息数据到达"""
         self.last_camera_info_time = self.get_clock().now()
-    
+
     def check_physical_device(self):
-        """检查物理设备连接状态"""
+        """检查物理设备连接状态 - 使用轻量级方法避免资源竞争"""
         try:
-            # 使用 pyrealsense2 检查物理设备
-            ctx = rs.context()
-            devices = ctx.query_devices()
-            if len(devices) == 0:
-                # 没有检测到RealSense设备
-                self.get_logger().warning('No RealSense camera detected physically!')
-                # 发布离线状态
-                status_msg = Bool()
-                status_msg.data = False
-                self.camera_status_pub.publish(status_msg)
-                return False
-            else:
-                # 额外检查设备是否实际可访问
-                device_connected = False
-                for device in devices:
-                    try:
-                        # 尝试获取设备信息以确认设备真正可访问
-                        device_name = device.get_info(rs.camera_info.name) if device else "Unknown"
-                        serial_number = device.get_info(rs.camera_info.serial_number) if device else "Unknown"
-                        self.get_logger().info(f'Detected RealSense Camera: {device_name}, Serial: {serial_number}')
-                        device_connected = True
-                        break  # 只需要找到一个可用的设备即可
-                    except Exception as e:
-                        self.get_logger().warning(f'Could not access device: {e}')
-                        continue
-                
-                if device_connected:
-                    self.get_logger().info('RealSense camera is physically connected and accessible')
-                    # 发布在线状态
+            # 使用 lsusb 检查 RealSense 设备（不会锁定设备）
+            # Intel RealSense 的 USB Vendor ID 是 8086
+            result = subprocess.run(
+                ["lsusb", "-d", "8086:"],  # 只检查 Intel 设备
+                capture_output=True,
+                text=True,
+                timeout=2,
+            )
+
+            # 检查是否有 RealSense 设备
+            if result.returncode == 0 and result.stdout.strip():
+                # 找到了 Intel 设备，进一步检查是否是 RealSense
+                # D435的Product ID是 0B3A
+                if (
+                    "0b3a" in result.stdout.lower()
+                    or "realsense" in result.stdout.lower()
+                ):
+                    self.physical_device_connected = True
                     status_msg = Bool()
                     status_msg.data = True
                     self.camera_status_pub.publish(status_msg)
                     return True
-                else:
-                    self.get_logger().warning('No accessible RealSense camera found')
-                    status_msg = Bool()
-                    status_msg.data = False
-                    self.camera_status_pub.publish(status_msg)
-                    return False
-        except ImportError:
-            # 如果pyrealsense2不可用，使用lsusb检查
-            try:
-                result = subprocess.run(['lsusb'], capture_output=True, text=True)
-                # 检查是否有Intel RealSense设备
-                if 'Intel' in result.stdout and ('RealSense' in result.stdout or '8086:' in result.stdout):
-                    status_msg = Bool()
-                    status_msg.data = True
-                    self.camera_status_pub.publish(status_msg)
-                    return True
-                else:
-                    status_msg = Bool()
-                    status_msg.data = False
-                    self.camera_status_pub.publish(status_msg)
-                    return False
-            except Exception as e:
-                self.get_logger().warning(f'Error checking USB devices: {e}')
-                return False
-        except Exception as e:
-            self.get_logger().warning(f'Error checking physical device: {e}')
+
+            # 没有检测到 RealSense 设备
+            self.get_logger().warning("No RealSense camera detected via USB!")
+            self.physical_device_connected = False
             status_msg = Bool()
             status_msg.data = False
             self.camera_status_pub.publish(status_msg)
             return False
-    
+
+        except subprocess.TimeoutExpired:
+            self.get_logger().warning("USB device check timed out")
+            return self.physical_device_connected  # 返回上次的状态
+        except Exception as e:
+            self.get_logger().warning(f"Error checking physical device: {e}")
+            return self.physical_device_connected  # 返回上次的状态
+
     def monitor_callback(self):
         """监控回调函数"""
         current_time = self.get_clock().now()
-        
+
         # 检查是否收到相机数据
-        image_timeout = (self.last_image_time is None or 
-                        (current_time - self.last_image_time).nanoseconds / 1e9 > self.timeout_seconds)
-        
-        info_timeout = (self.last_camera_info_time is None or 
-                       (current_time - self.last_camera_info_time).nanoseconds / 1e9 > self.timeout_seconds)
-        
-        # 如果物理检测失败，也认为相机不在线
-        physical_connected = self.check_physical_device()
-        
+        image_timeout = (
+            self.last_image_time is None
+            or (current_time - self.last_image_time).nanoseconds / 1e9
+            > self.timeout_seconds
+        )
+
+        info_timeout = (
+            self.last_camera_info_time is None
+            or (current_time - self.last_camera_info_time).nanoseconds / 1e9
+            > self.timeout_seconds
+        )
+
+        # 使用缓存的物理连接状态，避免频繁调用 pyrealsense2 导致资源竞争
+        # 物理状态由 device_check_timer 每2秒独立检测一次
+        physical_connected = self.physical_device_connected
+
         # 发布相机状态
         status_msg = Bool()
         status_msg.data = not (image_timeout or info_timeout) and physical_connected
         self.camera_status_pub.publish(status_msg)
-        
+
         # 如果相机无响应，尝试重启
         if (image_timeout or info_timeout) and physical_connected:
-            self.get_logger().warning('Camera appears to be unresponsive, checking process...')
+            self.get_logger().warning(
+                "Camera appears to be unresponsive, checking process..."
+            )
             self.check_and_restart_camera()
         elif not physical_connected:
-            self.get_logger().warning('Physical camera disconnected, cannot restart')
-    
+            self.get_logger().warning("Physical camera disconnected, cannot restart")
+
     def check_and_restart_camera(self):
         """检查并重启相机进程"""
         # 检查物理连接
         if not self.check_physical_device():
-            self.get_logger().error('Physical camera not connected, cannot restart')
+            self.get_logger().error("Physical camera not connected, cannot restart")
             return
-        
+
         if self.camera_process and self.camera_process.poll() is not None:
             # 进程仍在运行但无数据，终止它
-            self.get_logger().info('Terminating unresponsive camera process...')
+            self.get_logger().info("Terminating unresponsive camera process...")
             try:
                 self.camera_process.terminate()
                 try:
@@ -182,8 +176,8 @@ class CameraMonitor(Node):
                 except subprocess.TimeoutExpired:
                     self.camera_process.kill()
             except Exception as e:
-                self.get_logger().error(f'Error killing camera process: {e}')
-        
+                self.get_logger().error(f"Error killing camera process: {e}")
+
         # 重新启动相机
         success = self.start_camera_process()
         if success:
@@ -191,35 +185,46 @@ class CameraMonitor(Node):
         else:
             self.connection_attempts += 1
             if self.connection_attempts >= self.reconnect_attempts:
-                self.get_logger().error(f'Failed to connect after {self.reconnect_attempts} attempts')
+                self.get_logger().error(
+                    f"Failed to connect after {self.reconnect_attempts} attempts"
+                )
                 self.connection_attempts = 0  # 重置计数器，继续尝试
-    
+
     def start_camera_process(self):
         """启动相机进程"""
         try:
-            cmd = ['ros2', 'run', 'realsense2_camera', 'realsense2_camera_node']
+            # [修改] 使用自定义 SDK 节点替代官方 ROS 包
+            # 路径假定脚本在同一目录下，或者已安装到 lib/snap_7/
+            # 在 ROS2 colcon build 后，python 脚本通常安装在 install/snap_7/lib/snap_7/
+
+            # 构造命令： ros2 run snap_7 custom_realsense_node.py
+            # 注意：需要在 setup.py 中注册 entry_point
+            cmd = ["ros2", "run", "snap_7", "custom_realsense_node"]
+
             self.camera_process = subprocess.Popen(
-                cmd, 
-                stdout=subprocess.DEVNULL, 
-                stderr=subprocess.DEVNULL
+                cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
             )
-            
+
             # 等待进程启动
             time.sleep(3)  # 增加等待时间
-            
+
             if self.camera_process.poll() is not None:
-                self.get_logger().error(f'Camera process exited immediately with code {self.camera_process.poll()}')
+                self.get_logger().error(
+                    f"Camera process exited immediately with code {self.camera_process.poll()}"
+                )
                 self.camera_running = False
                 return False
             else:
-                self.get_logger().info('Camera process restarted successfully')
+                self.get_logger().info("Camera process restarted successfully")
                 self.camera_running = True
                 return True
-                
+
         except FileNotFoundError:
-            self.get_logger().error('ros2 executable not found. Ensure ROS2 is sourced.')
+            self.get_logger().error(
+                "ros2 executable not found. Ensure ROS2 is sourced."
+            )
         except Exception as e:
-            self.get_logger().error(f'Failed to start camera process: {e}')
+            self.get_logger().error(f"Failed to start camera process: {e}")
             self.camera_running = False
         return False
 
@@ -227,7 +232,7 @@ class CameraMonitor(Node):
 def main(args=None):
     rclpy.init(args=args)
     node = CameraMonitor()
-    
+
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
@@ -244,5 +249,5 @@ def main(args=None):
         rclpy.shutdown()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

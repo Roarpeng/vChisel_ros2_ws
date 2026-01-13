@@ -88,28 +88,19 @@ def generate_launch_description():
             'enable_infra1': False,
             'enable_infra2': False,
             'enable_sync': True,
-            'align_depth': True,
+            'align_depth.enable': True,
             'depth_module.profile': '640x480x6',
             'rgb_camera.profile': '640x480x6',
-            'color_width': 640,
-            'color_height': 480,
-            'color_fps': 6.0,
-            'depth_fps': 6.0,
-            'initial_reset': True,
-            'enable_pointcloud': False,
-            'pointcloud_texture_stream': 'RS2_STREAM_COLOR',
-            'pointcloud_texture_index': 0,
-            'allow_no_texture_points': False,
-            'ordered_pc': False,
-            'clip_distance': 2.0,
-            'linear_accel_cov': 0.0,
-            'angular_velocity_cov': 0.0,
-            'hold_back_imu_for_frames': 1,
+            # 'initial_reset': False,  # 避免启动时重置相机
+            'enable_gyro': False,  # 禁用 IMU 以减少资源使用
+            'enable_accel': False,
             'reconnect_timeout': 6.0,
         }]
     )
     
     # 5. Foxglove Bridge节点（可选）
+    # 注意: 使用压缩图像话题以避免 USB 带宽竞争
+    # 原始图像话题 (/camera/color/image_raw) 会占用大量带宽，导致相机断开
     foxglove_bridge_node = Node(
         package='foxglove_bridge',
         executable='foxglove_bridge',
@@ -119,10 +110,32 @@ def generate_launch_description():
         parameters=[{
             'port': LaunchConfiguration('foxglove_port'),
             'address': '0.0.0.0',
-            'topics': '[]',  # 订阅所有话题
+            'send_buffer_limit': 10000000,  # 10MB 缓冲区限制
+            'use_compression': True,  # 启用压缩减少带宽
             'tls': False,
-            'max_update_ms': 100,
-            'num_threads': 4,
+            'max_qos_depth': 5,  # 限制 QoS 深度
+            'num_threads': 2,  # 减少线程数
+            # 使用话题白名单，只订阅必要话题
+            # 使用压缩图像而非原始图像以减少带宽
+            'topic_whitelist': [
+                # 相机压缩图像 (低带宽)
+                '/camera/camera/color/image_raw/compressed',
+                '/camera/camera/aligned_depth_to_color/image_raw/compressedDepth',
+                # 法向计算结果
+                '/captured_image',  # norm_calc 发布的处理后图像
+                '/visual_norm_result',  # 法向可视化结果
+                '/debug_processed_cloud',  # 调试点云
+                # 相机状态
+                '/camera_status',
+                # 参数调整所需
+                '/parameter_events',
+                # TF
+                '/tf',
+                '/tf_static',
+            ],
+            # 参数服务支持(用于Foxglove调参)
+            'capabilities': ['clientPublish', 'parameters', 'parametersSubscribe', 'services', 'connectionGraph'],
+            'include_hidden': False,
         }]
     )
     

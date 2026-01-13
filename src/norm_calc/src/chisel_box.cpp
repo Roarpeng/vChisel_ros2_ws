@@ -325,35 +325,25 @@ bool ChiselBox::searchWithRandomMode(pcl::PointCloud<pcl::PointXYZRGBNormal>::Pt
     }
   }
 
-  if (best_idx >= 0) {
-    result = cloud->points[best_idx];
+    if (best_idx >= 0) {
+      result = cloud->points[best_idx];
+      
+      // [修复] 随机模式严禁伪造法向！必须使用点的真实法向。
+      // 如果该点的真实法向不满足基本要求（如太斜），则视为无效点。
+      
+      // 检查真实法向是否可用 (防止打滑)
+      // 这里使用一个极度宽松的阈值 (e.g. 0.5 = 60度)，只要不是垂直于墙面的点就行
+      if (std::abs(result.normal_z) < 0.5f) {
+         std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] Random mode found point but normal is bad (" 
+                   << result.normal_z << "), skipping." << std::endl;
+         return false; 
+      }
 
-    // 随机旋转法向量
-    float norm_angle = ((float)rand() / RAND_MAX - 0.5f) * 2.0f * param_.RANDOM_ANGLE_RANGE;  // -RANDOM_ANGLE_RANGE 到 +RANDOM_ANGLE_RANGE
-    float cos_angle = cos(norm_angle);
-    float sin_angle = sin(norm_angle);
-
-    // 在XY平面旋转法向量
-    float new_normal_x = result.normal_x * cos_angle - result.normal_y * sin_angle;
-    float new_normal_y = result.normal_x * sin_angle + result.normal_y * cos_angle;
-    result.normal_x = new_normal_x;
-    result.normal_y = new_normal_y;
-
-    // 归一化法向量
-    float norm = std::sqrt(result.normal_x * result.normal_x +
-                           result.normal_y * result.normal_y +
-                           result.normal_z * result.normal_z);
-    if (norm > 0.001f) {
-      result.normal_x /= norm;
-      result.normal_y /= norm;
-      result.normal_z /= norm;
+      std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] Random mode found point at ("
+                << result.x << ", " << result.y << ", " << result.z << ") with REAL normal ("
+                << result.normal_x << ", " << result.normal_y << ", " << result.normal_z << ")" << std::endl;
+      return true;
     }
-
-    std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] Random mode found point at ("
-              << result.x << ", " << result.y << ", " << result.z << ") with normal ("
-              << result.normal_x << ", " << result.normal_y << ", " << result.normal_z << ")" << std::endl;
-    return true;
-  }
 
   std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] Random mode failed: no point found near target" << std::endl;
   return false;

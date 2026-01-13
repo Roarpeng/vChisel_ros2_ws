@@ -100,8 +100,7 @@ launch_system() {
     print_info "按 Ctrl+C 停止系统"
     echo ""
     
-    ros2 launch norm_calc system_with_foxglove.launch.py \
-        foxglove_enabled:=$FOXGLOVE_ENABLED \
+    ros2 launch norm_calc with_foxglove.launch.py \
         foxglove_port:=$FOXGLOVE_PORT
 }
 

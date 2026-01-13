@@ -79,6 +79,9 @@ public:
                      pcl::PointCloud<pcl::PointXYZ>::Ptr obstacles,
                      pcl::PointXYZRGBNormal &out_point);
 
+  // [新增] 更新参数
+  void updateParams(const ChiselParam &param) { param_ = param; }
+
 private:
   int row_, col_;
   ChiselParam param_;

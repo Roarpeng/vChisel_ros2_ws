@@ -563,6 +563,11 @@ private:
       float original_center_weight = param_.CENTER_WEIGHT;
       param_.ANGLE_WEIGHT *= weight_factor;
       param_.CENTER_WEIGHT *= weight_factor;
+      
+      // [修复] 同步参数到所有网格
+      for (auto &grid : grids_) {
+        grid->updateParams(param_);
+      }
 
       RCLCPP_WARN(this->get_logger(),
                       "[%s] Strict mode only found %d points (< %d), triggering relaxed mode for skipped grids...",
@@ -609,6 +614,11 @@ private:
       // 恢复原始权重
       param_.ANGLE_WEIGHT = original_angle_weight;
       param_.CENTER_WEIGHT = original_center_weight;
+      
+      // [修复] 恢复参数到所有网格
+      for (auto &grid : grids_) {
+        grid->updateParams(param_);
+      }
 
       RCLCPP_INFO(this->get_logger(),
                       "[%s] Relaxed mode found %d additional points, total: %d",
