@@ -150,6 +150,11 @@ private:
     param_.RANDOM_OFFSET_RANGE = this->declare_parameter("RANDOM_OFFSET_RANGE", 0.02);
     param_.RANDOM_ANGLE_RANGE = this->declare_parameter("RANDOM_ANGLE_RANGE", 0.14);
 
+    // [新增] 读取局部平面拟合和高度残差参数
+    param_.RESIDUAL_WEIGHT = this->declare_parameter("RESIDUAL_WEIGHT", 8.0);
+    param_.RANSAC_THRESHOLD = this->declare_parameter("RANSAC_THRESHOLD", 0.005);
+    param_.MIN_PLANE_POINTS = this->declare_parameter("MIN_PLANE_POINTS", 30);
+
     // 读取手眼标定矩阵参数
     std::vector<double> row1 = this->declare_parameter(
       "hand_eye_calibration.row1",

@@ -60,7 +60,22 @@ typedef struct {
   // [新增] 随机模式参数
   float RANDOM_OFFSET_RANGE;  // 随机位置偏移范围
   float RANDOM_ANGLE_RANGE;   // 随机法向角度范围
+
+  // [新增] 局部平面拟合和高度残差参数
+  float RESIDUAL_WEIGHT;      // 高度残差权重（凸起优先）
+  float RANSAC_THRESHOLD;     // RANSAC平面拟合阈值（米）
+  int MIN_PLANE_POINTS;       // RANSAC平面拟合最小点数
 } ChiselParam;
+
+// [新增] 局部参考平面结构体
+struct LocalPlane {
+  Eigen::Vector3f normal;    // 平面法向量
+  float d;                    // 平面方程: n·p + d = 0
+  float avg_height;           // 平均高度
+  float max_residual;         // 最大高度残差
+  bool is_valid;              // 平面是否有效
+  LocalPlane() : d(0.0f), avg_height(0.0f), max_residual(0.0f), is_valid(false) {}
+};
 
 class ChiselBox {
 public:
@@ -99,6 +114,12 @@ private:
   bool searchWithRandomMode(pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud,
                            pcl::PointCloud<pcl::PointXYZ>::Ptr obstacles,
                            pcl::PointXYZRGBNormal &result);
+
+  // [新增] 拟合局部参考平面（使用RANSAC）
+  bool fitLocalPlane(pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud, LocalPlane& plane);
+
+  // [新增] 计算点相对于局部平面的高度残差
+  float calculateHeightResidual(const pcl::PointXYZRGBNormal& point, const LocalPlane& plane);
 
   // 内部通用搜索逻辑
   bool searchWithCriteria(pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud,

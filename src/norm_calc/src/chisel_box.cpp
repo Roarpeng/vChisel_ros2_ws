@@ -2,6 +2,10 @@
 #include <iostream>
 #include <limits>
 #include <pcl/surface/convex_hull.h>
+#include <pcl/sample_consensus/method_types.h>
+#include <pcl/sample_consensus/model_types.h>
+#include <pcl/segmentation/sac_segmentation.h>
+#include <pcl/filters/extract_indices.h>
 
 namespace chisel_box {
 
@@ -143,6 +147,12 @@ bool ChiselBox::searchWithCriteria(
   std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] Z-range: " << z_range * 1000.0f << "mm, Avg-curv: " << avg_curv
             << ", Is-flat: " << (is_flat_surface ? "YES" : "NO")
             << ", Is-protrusion: " << (is_protrusion ? "YES" : "NO") << std::endl;
+
+  // ==========================================
+  // 第二步：拟合局部参考平面（使用RANSAC）
+  // ==========================================
+  LocalPlane local_plane;
+  bool has_valid_plane = fitLocalPlane(cloud, local_plane);
 
   // 定义有效的高度区间 [valid_z_min, valid_z_max]
   float valid_z_min = z_min;
@@ -412,27 +422,54 @@ bool ChiselBox::searchWithCriteria(
     float dist_center =
         std::sqrt(std::pow(pt.x - cx, 2) + std::pow(pt.y - cy, 2));
 
+    // [新增] 计算高度残差（相对于局部参考平面）
+    float height_residual = 0.0f;
+    if (has_valid_plane) {
+      height_residual = calculateHeightResidual(pt, local_plane);
+    }
+
     float score = 0.0f;
 
     if (is_plane) {
       // 【平面策略评分】：垂直凿击
       // 1. 平面位置奖励
       score += param_.PLANE_BONUS;  // 平面位置额外奖励
-      
+
       // 2. 强调法向X分量（沿着凿击方向，垂直于墙面）
       score += param_.ANGLE_WEIGHT * pt.normal_x;
-      
+
       // 3. 平整度奖励（曲率越小越好）
       score -= param_.CURV_WEIGHT * pt.curvature;
-      
-      // 4. 随机分布（不强调中心位置）
+
+      // [新增] 4. 高度残差评分（已削平区域自动降低优先级）
+      if (has_valid_plane) {
+        // 如果高度残差接近0（已削平），给予轻微惩罚，降低优先级
+        if (std::abs(height_residual) < 0.005f) {  // 残差 < 5mm
+          score -= param_.RESIDUAL_WEIGHT * 2.0f;  // 已削平区域降低优先级
+        } else if (height_residual > 0.01f) {  // 凸起 > 1cm
+          score += param_.RESIDUAL_WEIGHT * height_residual * 5.0f;  // 凸起优先
+        }
+      }
+
+      // 5. 随机分布（不强调中心位置）
       score -= param_.CENTER_WEIGHT * dist_center * 0.1f;
-      
+
     } else {
       // 【山腰策略评分】：凹凸不平时的最佳凿击位置
-      
+
       // 1. 在有效区间内，优先选法向变化小（平整）的地方，防止打在棱上
       score -= param_.CURV_WEIGHT * pt.curvature * 2.0f; // 加倍惩罚曲率
+
+      // [新增] 1.5. 高度残差评分（凸起优先）
+      if (has_valid_plane) {
+        if (height_residual > 0.01f) {  // 凸起 > 1cm
+          // 凸起程度越大，分数越高（凸起优先）
+          score += param_.RESIDUAL_WEIGHT * height_residual * 10.0f;
+        } else if (height_residual < -0.005f) {  // 凹陷 > 0.5cm
+          // 凹陷区域给予惩罚
+          score -= param_.RESIDUAL_WEIGHT * std::abs(height_residual) * 5.0f;
+        }
+      }
 
       // 2. 【山腰优先】：优先选择高度在区间中间位置（山腰）的点
       // 计算点在有效区间中的归一化位置（0=底部，1=顶部）
@@ -651,6 +688,110 @@ float ChiselBox::calculateConvexHullArea(pcl::PointCloud<pcl::PointXYZRGBNormal>
   float area = std::abs(total_area) / 2.0f;
   std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] Area: " << area * 10000.0f << " cm² (points: " << cloud->size() << ")" << std::endl;
   return area;
+}
+
+// [新增] 拟合局部参考平面（使用RANSAC）
+bool ChiselBox::fitLocalPlane(pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud, LocalPlane& plane) {
+  if (cloud->empty() || cloud->size() < static_cast<size_t>(param_.MIN_PLANE_POINTS)) {
+    plane.is_valid = false;
+    std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] Local plane fitting failed: not enough points ("
+              << cloud->size() << " < " << param_.MIN_PLANE_POINTS << ")" << std::endl;
+    return false;
+  }
+
+  // 创建点云副本（只保留XYZ）
+  pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_xyz(new pcl::PointCloud<pcl::PointXYZ>);
+  cloud_xyz->resize(cloud->size());
+  for (size_t i = 0; i < cloud->size(); ++i) {
+    cloud_xyz->points[i].x = cloud->points[i].x;
+    cloud_xyz->points[i].y = cloud->points[i].y;
+    cloud_xyz->points[i].z = cloud->points[i].z;
+  }
+
+  // 创建 SAC 分割器
+  pcl::SACSegmentation<pcl::PointXYZ> seg;
+  pcl::PointIndices::Ptr inliers(new pcl::PointIndices);
+  pcl::ModelCoefficients::Ptr coefficients(new pcl::ModelCoefficients);
+
+  // 设置参数
+  seg.setOptimizeCoefficients(true);
+  seg.setModelType(pcl::SACMODEL_PLANE);
+  seg.setMethodType(pcl::SAC_RANSAC);
+  seg.setDistanceThreshold(param_.RANSAC_THRESHOLD);
+  seg.setMaxIterations(1000);
+
+  // 执行分割
+  seg.setInputCloud(cloud_xyz);
+  seg.segment(*inliers, *coefficients);
+
+  // 检查是否找到平面
+  if (inliers->indices.size() < static_cast<size_t>(param_.MIN_PLANE_POINTS)) {
+    plane.is_valid = false;
+    std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] Local plane fitting failed: not enough inliers ("
+              << inliers->indices.size() << " < " << param_.MIN_PLANE_POINTS << ")" << std::endl;
+    return false;
+  }
+
+  // 提取平面参数
+  plane.normal[0] = coefficients->values[0];
+  plane.normal[1] = coefficients->values[1];
+  plane.normal[2] = coefficients->values[2];
+  plane.d = coefficients->values[3];
+
+  // 归一化法向量
+  float norm = plane.normal.norm();
+  if (norm > 0.001f) {
+    plane.normal /= norm;
+  }
+
+  // 计算平均高度和最大残差
+  float z_sum = 0.0f;
+  float max_residual = 0.0f;
+
+  for (size_t i = 0; i < cloud->size(); ++i) {
+    const auto& pt = cloud->points[i];
+    z_sum += pt.z;
+
+    // 计算点到平面的距离（高度残差）
+    float residual = std::abs(plane.normal.dot(Eigen::Vector3f(pt.x, pt.y, pt.z)) + plane.d);
+    if (residual > max_residual) {
+      max_residual = residual;
+    }
+  }
+
+  plane.avg_height = z_sum / cloud->size();
+  plane.max_residual = max_residual;
+  plane.is_valid = true;
+
+  std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] Local plane fitted: normal=("
+            << plane.normal[0] << ", " << plane.normal[1] << ", " << plane.normal[2]
+            << "), d=" << plane.d << ", avg_height=" << plane.avg_height
+            << ", max_residual=" << max_residual * 1000.0f << "mm" << std::endl;
+
+  return true;
+}
+
+// [新增] 计算点相对于局部平面的高度残差
+float ChiselBox::calculateHeightResidual(const pcl::PointXYZRGBNormal& point, const LocalPlane& plane) {
+  if (!plane.is_valid) {
+    return 0.0f;
+  }
+
+  // 计算点到平面的有符号距离
+  // 公式：distance = n·p + d
+  float distance = plane.normal.dot(Eigen::Vector3f(point.x, point.y, point.z)) + plane.d;
+
+  // 如果法向量的Z分量为正，则距离为正表示点在平面上方（凸起）
+  // 如果法向量的Z分量为负，则距离为正表示点在平面下方（凸起）
+  // 我们希望得到有符号的残差，正值表示凸起，负值表示凹陷
+  float signed_residual = distance;
+
+  // 如果法向量指向下方（Z < 0），则反转符号
+  if (plane.normal[2] < 0.0f) {
+    signed_residual = -signed_residual;
+  }
+
+  return signed_residual;
 }
 
 } // namespace chisel_box
