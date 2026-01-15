@@ -129,13 +129,16 @@ bool ChiselBox::searchWithCriteria(
   float avg_z = z_sum / cloud->size();
   float avg_curv = curv_sum / cloud->size();
 
-  // 改进的凸起检测：主要基于曲率，高度差作为辅助条件
-  // 1. 曲率超过阈值（主要判定：曲面/凸起）
-  // 2. 或者曲率适中但高度差很大（辅助判定：明显凸起）
-  bool is_protrusion = (avg_curv > 0.02) ||  // 平均曲率 > 0.02，判定为曲面
-                       (avg_curv > 0.01 && z_range > param_.PROTRUSION_TH);  // 曲率适中但高度差 > 3cm
+  // 【自适应平整度检测】
+  // 平面判定：曲率 < 0.03 认为平面
+  // 凹凸判定：曲率 ≥ 0.03 认为凹凸
+  bool is_flat_surface = (avg_curv < param_.FLAT_CURV_TH);
+  
+  // 凸起检测：高度差 ≥ 2cm 且 曲率 ≥ 0.03
+  bool is_protrusion = (z_range >= param_.PROTRUSION_TH) && (!is_flat_surface);
 
   std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] Z-range: " << z_range * 1000.0f << "mm, Avg-curv: " << avg_curv
+            << ", Is-flat: " << (is_flat_surface ? "YES" : "NO")
             << ", Is-protrusion: " << (is_protrusion ? "YES" : "NO") << std::endl;
 
   // 定义有效的高度区间 [valid_z_min, valid_z_max]
@@ -143,19 +146,31 @@ bool ChiselBox::searchWithCriteria(
   float valid_z_max = z_max;
 
   if (is_protrusion) {
-    // 【策略核心】：如果是凸起，切掉顶部和底部
-    // 顶部容易滑，底部可能太深打不到
-    // 目标：半山腰 (Waist) 到 根部 (Base)
-    valid_z_max = z_max - (z_range * param_.TIP_CROP_RATIO);  // 切顶
-    valid_z_min = z_min + (z_range * param_.BASE_CROP_RATIO); // 切底
+    // 【动态切顶切底策略】
+    // 根据高度差动态调整切顶比例：
+    // - 高度差 < 2cm：切顶0%（不切顶）
+    // - 高度差 2-3cm：切顶5%
+    // - 高度差 > 3cm：切顶10%
+    float tip_ratio = 0.0f;
+    if (z_range < 0.02f) {
+      tip_ratio = 0.0f;  // 不切顶
+    } else if (z_range < 0.03f) {
+      tip_ratio = 0.05f;  // 切顶5%
+    } else {
+      tip_ratio = 0.10f;  // 切顶10%
+    }
+    
+    // 切底：固定10%
+    valid_z_max = z_max - (z_range * tip_ratio);  // 动态切顶
+    valid_z_min = z_min + (z_range * param_.BASE_CROP_RATIO); // 切底10%
 
-    // 调试信息 (可选)
-    // std::cout << "Detected Protrusion! Range: " << z_range
-    //           << " Target Z: " << valid_z_min << " ~ " << valid_z_max <<
-    //           std::endl;
+    std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] Dynamic tip crop: " << tip_ratio * 100.0f 
+              << "% (z_range=" << z_range * 1000.0f << "mm)" << std::endl;
   } else {
-    // 如果是平面，优先打微凸的地方，不限制顶部
-    // 保持 valid_z_max = z_max
+    // 【平整表面策略】
+    // 不限制顶部，优先随机分布
+    valid_z_max = z_max;
+    valid_z_min = z_min;
   }
 
   // ==========================================
@@ -226,9 +241,15 @@ bool ChiselBox::searchWithCriteria(
       // 1. 在有效区间内，优先选法向变化小（平整）的地方，防止打在棱上
       score -= param_.CURV_WEIGHT * pt.curvature * 2.0f; // 加倍惩罚曲率
 
-      // 2. 弱化高度权重：既然已经切顶了，剩下的区间里，高度没那么重要了
-      // 只要在区间内，主要看是否好下刀
-      score += param_.HEIGHT_WEIGHT * pt.z * 0.5f;
+      // 2. 【山腰优先】：优先选择高度在区间中间位置（山腰）的点
+      // 计算点在有效区间中的归一化位置（0=底部，1=顶部）
+      float normalized_height = (pt.z - valid_z_min) / (valid_z_max - valid_z_min);
+      // 山腰位置（0.4-0.6）给予额外加分
+      if (normalized_height >= 0.4f && normalized_height <= 0.6f) {
+        score += param_.HEIGHT_WEIGHT * 2.0f;  // 山腰位置加倍奖励
+      } else {
+        score += param_.HEIGHT_WEIGHT * pt.z * 0.5f;  // 其他位置弱化高度权重
+      }
 
       // 3. 极度强调法向垂直度：半山腰下刀，必须保证不滑
       score += param_.ANGLE_WEIGHT * std::abs(pt.normal_z) * 1.5f;
@@ -240,7 +261,7 @@ bool ChiselBox::searchWithCriteria(
       score += param_.ANGLE_WEIGHT * std::abs(pt.normal_z);
     }
 
-    // 通用：优先打网格中心
+    // 通用：优先打网格中心（但在全局补充时降低权重）
     score -= param_.CENTER_WEIGHT * dist_center;
 
     if (score > best_score) {
@@ -395,20 +416,6 @@ float ChiselBox::calculateConvexHullArea(pcl::PointCloud<pcl::PointXYZRGBNormal>
   float area = std::abs(total_area) / 2.0f;
   std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] Area: " << area * 10000.0f << " cm² (points: " << cloud->size() << ")" << std::endl;
   return area;
-}
-
-// [新增] 根据面积确定搜索模式
-ChiselBox::SearchMode ChiselBox::determineSearchMode(float area) {
-  const float PLANE_AREA_HIGH = param_.PLANE_AREA_HIGH;  // 0.00035 m² (3.5cm²)
-  const float PLANE_AREA_LOW = param_.PLANE_AREA_LOW;   // 0.00025 m² (2.5cm²)
-
-  if (area >= PLANE_AREA_HIGH) {
-    return MODE_PLANE;
-  } else if (area >= PLANE_AREA_LOW) {
-    return MODE_HYBRID;
-  } else {
-    return MODE_PROTRUSION;
-  }
 }
 
 } // namespace chisel_box

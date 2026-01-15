@@ -41,21 +41,15 @@ typedef struct {
 
   // [新增] 凸起策略参数
   float PROTRUSION_TH;   // 判定为凸起的高度差阈值
-  float TIP_CROP_RATIO;  // 切顶比例
+  float TIP_CROP_RATIO;  // 切顶比例（基准值，会根据高度差动态调整）
   float BASE_CROP_RATIO; // 切底比例
 
   // [新增] 随机模式参数
   float RANDOM_OFFSET_RANGE;  // 随机位置偏移范围
   float RANDOM_ANGLE_RANGE;   // 随机法向角度范围
 
-  // [新增] 平面面积阈值（平方米）
-  float PLANE_AREA_HIGH;  // 3.5cm² - 平面模式阈值
-  float PLANE_AREA_LOW;   // 2.5cm² - 凹凸面模式阈值
-
-  // [新增] 混合模式参数
-  float HYBRID_NORM_TH;   // 混合法向阈值
-  float HYBRID_HOLE_DIST; // 混合避障距离
-  float HYBRID_CURV_TH;   // 混合曲率阈值
+  // [新增] 平面判定参数
+  float FLAT_CURV_TH;  // 曲率阈值：< 0.03 认为平面，>= 0.03 认为凹凸
 } ChiselParam;
 
 class ChiselBox {
@@ -84,18 +78,12 @@ private:
   ChiselParam param_;
   BoxState state_;
 
-  // [新增] 搜索模式枚举
-  enum SearchMode { MODE_PLANE, MODE_HYBRID, MODE_PROTRUSION };
-
   // [新增] 上一次点位存储
   pcl::PointXYZRGBNormal last_point_;
   bool has_last_point_;
 
   // [新增] 计算点云的凸包面积（平方米）
   float calculateConvexHullArea(pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud);
-
-  // [新增] 根据面积确定搜索模式
-  SearchMode determineSearchMode(float area);
 
   // [新增] 随机模式搜索（基于上一次点位或网格中心）
   bool searchWithRandomMode(pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud,

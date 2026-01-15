@@ -131,12 +131,8 @@ private:
     param_.RANDOM_OFFSET_RANGE = this->declare_parameter("RANDOM_OFFSET_RANGE", 0.02);
     param_.RANDOM_ANGLE_RANGE = this->declare_parameter("RANDOM_ANGLE_RANGE", 0.35);
 
-    // [新增] 读取平面面积阈值参数
-    param_.PLANE_AREA_HIGH = this->declare_parameter("PLANE_AREA_HIGH", 0.00035);
-    param_.PLANE_AREA_LOW = this->declare_parameter("PLANE_AREA_LOW", 0.00025);
-    param_.HYBRID_NORM_TH = this->declare_parameter("HYBRID_NORM_TH", 0.885);
-    param_.HYBRID_HOLE_DIST = this->declare_parameter("HYBRID_HOLE_DIST", 0.0425);
-    param_.HYBRID_CURV_TH = this->declare_parameter("HYBRID_CURV_TH", 0.085);
+    // [新增] 读取平面判定参数
+    param_.FLAT_CURV_TH = this->declare_parameter("FLAT_CURV_TH", 0.03);
 
     // 读取手眼标定矩阵参数
     std::vector<double> row1 = this->declare_parameter(

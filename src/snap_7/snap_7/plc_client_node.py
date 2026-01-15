@@ -446,16 +446,44 @@ class PLCClientNode(Node):
                 return
 
             try:
-                # 【新增】在启动新相机之前，先终止所有旧的相机进程
-                # 防止多个相机进程同时运行导致图像混乱
-                self.get_logger().info('Cleaning up old camera processes...')
+                # 【增强版】在启动新相机之前，使用多种方法彻底清理所有旧相机进程
+                self.get_logger().info('Forcefully cleaning up all old camera processes...')
+
+                # 方法1: pkill -9 清理所有 realsense2_camera 进程
                 try:
-                    subprocess.run(['pkill', '-f', 'realsense2_camera'], 
+                    subprocess.run(['pkill', '-9', '-f', 'realsense2_camera'],
                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                    time.sleep(1)  # 等待进程完全终止
-                    self.get_logger().info('Old camera processes cleaned up')
+                    time.sleep(1)
                 except Exception as e:
-                    self.get_logger().warning(f'Failed to clean up old camera processes: {e}')
+                    self.get_logger().warning(f'pkill failed: {e}')
+
+                # 方法2: pkill -9 清理 realsense2_camera_node 进程
+                try:
+                    subprocess.run(['pkill', '-9', '-f', 'realsense2_camera_node'],
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    time.sleep(0.5)
+                except Exception as e:
+                    self.get_logger().warning(f'pkill for node failed: {e}')
+
+                # 方法3: killall 作为最后手段
+                try:
+                    subprocess.run(['killall', '-9', 'realsense2_camera_node'],
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    time.sleep(0.5)
+                except Exception as e:
+                    pass  # killall 可能返回非零退出码，这是正常的
+
+                # 验证清理结果
+                try:
+                    result = subprocess.run(['pgrep', '-f', 'realsense2_camera'],
+                                          capture_output=True, text=True)
+                    if result.returncode == 0:
+                        remaining = result.stdout.strip().split('\n')
+                        self.get_logger().warning(f'Warning: {len(remaining)} camera processes still running: {remaining}')
+                    else:
+                        self.get_logger().info('All old camera processes successfully cleaned up')
+                except Exception as e:
+                    self.get_logger().debug(f'Could not verify cleanup: {e}')
                 
                 # 修改相机启动参数，提高帧率从10到15fps，并禁用一些可能导致缓存的选项
                 cmd = ['ros2', 'run', 'realsense2_camera', 'realsense2_camera_node',
@@ -536,31 +564,70 @@ class PLCClientNode(Node):
             self.write_registers_uint16([999], start=16)  # 发送错误代码
 
     def cam_shutdown(self):
-        if not self.camStatus:
-            self.get_logger().info('Camera not running')
-            # 即使相机没有运行，也要确保状态被正确重置
-            self.camStatus = False
-            self.mark_1 = 0
-            self.mark_2 = 0
-            self.pakg_new = 0
-            return
+        # 【增强版】彻底清理所有相机进程（包括子进程）
+        self.get_logger().info('Shutting down all camera processes (including child processes)...')
 
-        try:
-            if self.cam_proc and self.cam_proc.poll() is None:
+        # 1. 首先尝试优雅地终止存储的进程引用
+        if self.cam_proc and self.cam_proc.poll() is None:
+            try:
                 self.cam_proc.terminate()
                 try:
-                    self.cam_proc.wait(timeout=5)
+                    self.cam_proc.wait(timeout=3)
                 except subprocess.TimeoutExpired:
                     self.cam_proc.kill()
-        except Exception as e:
-            self.get_logger().warning(f'Error terminating camera process: {e}')
+                    self.get_logger().info('Force killed camera process')
+            except Exception as e:
+                self.get_logger().warning(f'Error terminating camera process: {e}')
 
-        # 确保所有相关状态都被重置
+        # 2. 【关键修复】使用多种方法强制终止所有相机进程
+        import time
+
+        # 方法1: 使用 pkill -9 清理所有 realsense2_camera 进程
+        try:
+            subprocess.run(['pkill', '-9', '-f', 'realsense2_camera'],
+                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            time.sleep(1)
+            self.get_logger().info('Step 1: pkill -9 executed')
+        except Exception as e:
+            self.get_logger().warning(f'pkill failed: {e}')
+
+        # 方法2: 再次尝试 pkill（确保清理子进程）
+        try:
+            subprocess.run(['pkill', '-9', '-f', 'realsense2_camera_node'],
+                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            time.sleep(0.5)
+            self.get_logger().info('Step 2: pkill -9 for node executed')
+        except Exception as e:
+            self.get_logger().warning(f'pkill for node failed: {e}')
+
+        # 方法3: 使用 killall 作为最后手段
+        try:
+            subprocess.run(['killall', '-9', 'realsense2_camera_node'],
+                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            time.sleep(0.5)
+            self.get_logger().info('Step 3: killall executed')
+        except Exception as e:
+            # killall 可能返回非零退出码（如果没有进程），这是正常的
+            pass
+
+        # 3. 验证清理结果
+        try:
+            result = subprocess.run(['pgrep', '-f', 'realsense2_camera'],
+                                  capture_output=True, text=True)
+            if result.returncode == 0:
+                remaining_pids = result.stdout.strip().split('\n')
+                self.get_logger().warning(f'Warning: {len(remaining_pids)} camera processes still running: {remaining_pids}')
+            else:
+                self.get_logger().info('All camera processes successfully terminated')
+        except Exception as e:
+            self.get_logger().debug(f'Could not verify cleanup: {e}')
+
+        # 4. 确保所有相关状态都被重置
         self.camStatus = False
         self.mark_1 = 0
         self.mark_2 = 0
         self.pakg_new = 0
-        self.get_logger().info('Camera process shutdown complete')
+        self.get_logger().info('Camera shutdown complete')
 
     def _monitor_camera_status(self):
         """监控相机进程状态，检测意外断开"""
