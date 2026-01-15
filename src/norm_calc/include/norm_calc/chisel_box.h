@@ -80,6 +80,15 @@ typedef struct {
 
   // [新增] 位置距离避让参数（防止重复凿击）
   float POSITION_DISTANCE_THRESHOLD;  // 位置距离阈值（米，与上次点位的距离小于此值时认为太近）
+
+  // [新增] 曲率避让参数（平面点避开曲率大于均值区域）
+  float CURVATURE_AVOIDANCE_DISTANCE;  // 曲率避让距离（米，平面点需要避开曲率大于均值区域的距离）
+
+  // [新增] 曲率浮动范围参数（用于平面识别）
+  float CURVATURE_TOLERANCE;  // 曲率浮动范围（曲率在均值左右浮动此范围内认为是平面）
+
+  // [新增] 曲率突变参数（用于避开曲率突变区域）
+  float CURVATURE_OUTLIER_THRESHOLD;  // 曲率突变阈值（标准差的倍数，曲率 > 均值 + k * 标准差认为是突变）
 } ChiselParam;
 
 // [新增] 局部参考平面结构体
@@ -155,6 +164,21 @@ private:
   // [新增] 检查位置距离是否太近（防止重复凿击）
   bool isPositionTooClose(const pcl::PointXYZRGBNormal& current_point,
                          const pcl::PointXYZRGBNormal& last_point);
+
+  // [新增] 简化策略：在平面中心凿击
+  bool findPlaneCenterPoint(pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud,
+                             pcl::PointCloud<pcl::PointXYZ>::Ptr obstacles,
+                             pcl::PointXYZRGBNormal &result);
+
+  // [新增] 简化策略：在山腰位置凿击（高度差的均值）
+  bool findMountainWaistPoint(pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud,
+                               pcl::PointCloud<pcl::PointXYZ>::Ptr obstacles,
+                               pcl::PointXYZRGBNormal &result);
+
+  // [新增] 简化策略：扩大搜索区域（20%）
+  bool findExpandedRegionPoint(pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud,
+                               pcl::PointCloud<pcl::PointXYZ>::Ptr obstacles,
+                               pcl::PointXYZRGBNormal &result);
 
   // 内部通用搜索逻辑
   bool searchWithCriteria(pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud,

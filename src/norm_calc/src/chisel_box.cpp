@@ -29,97 +29,48 @@ bool ChiselBox::findBestPoint(
   if (cloud_roi->empty())
     return false;
 
-  // [新增] Cell停止条件检查：如果Cell已经足够平坦，标记为完成
-  if (isCellComplete(cloud_roi)) {
-    state_ = STATE_COMPLETED;
-    std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] Cell marked as COMPLETED (already flat enough)" << std::endl;
-    return false;
-  }
+  std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] Starting point search strategy..." << std::endl;
 
-  // === 平面优先策略 ===
+  // [禁用] Cell停止条件检查：如果Cell已经足够平坦，标记为完成
+  // 注释原因：用户要求计算24个点，需要对所有方格都进行凿击
+  // if (isCellComplete(cloud_roi)) {
+  //   state_ = STATE_COMPLETED;
+  //   std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] Cell marked as COMPLETED (already flat enough)" << std::endl;
+  //   return false;
+  // }
 
-  // 【步骤1】计算凸包面积和平均曲率
-  float area = calculateConvexHullArea(cloud_roi);
-  
-  // 计算平均曲率
-  float avg_curv = 0.0f;
-  for (const auto &pt : cloud_roi->points) {
-    avg_curv += pt.curvature;
-  }
-  avg_curv /= cloud_roi->size();
-  
-  // 【步骤2】判断是否为平面
-  // 平面判定：面积 > 1平方cm 且 曲率 < 0.035
-  bool is_plane = (area > param_.PLANE_AREA_TH) && (avg_curv < param_.PLANE_CURV_TH);
+  // === 简化策略：三步搜索 ===
 
-  std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] Area: " << area * 10000.0f
-            << " cm², Avg-curv: " << avg_curv << ", Is-plane: "
-            << (is_plane ? "YES" : "NO") << std::endl;
-
-  // [新增] 计算目标高度（用于均匀下降导向）
-  float z_target = calculateTargetHeight(cloud_roi);
-
-  // 【步骤3】根据表面类型选择策略
   bool found = false;
 
-  if (is_plane) {
-    // 【平面策略】：垂直凿击
-    std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] Using PLANE strategy" << std::endl;
-    found = searchWithCriteria(cloud_roi, obstacles,
-                               param_.PLANE_NORM_TH,      // 法向阈值（非常严格）
-                               param_.PLANE_HOLE_DIST,    // 避障距离
-                               param_.PLANE_CURV_TH,      // 曲率阈值
-                               out_point,
-                               true,  // is_large_plane = true
-                               true,  // is_plane = true
-                               z_target); // [新增] 目标高度
-  } else {
-    // 【山腰策略】：凹凸不平时的最佳凿击位置
-    std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] Using MOUNTAIN strategy" << std::endl;
-    found = searchWithCriteria(cloud_roi, obstacles,
-                               param_.MOUNTAIN_NORM_TH,   // 法向阈值（适中）
-                               param_.MOUNTAIN_HOLE_DIST, // 避障距离（更大）
-                               0.15,                     // 曲率阈值（宽松）
-                               out_point,
-                               false, // is_large_plane = false
-                               false, // is_plane = false
-                               z_target); // [新增] 目标高度
+  // 【步骤1】平面优先：曲率 <= 均值，面积 > 1cm²，在平面中心凿击
+  std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] Step 1: Try plane center strategy" << std::endl;
+  found = findPlaneCenterPoint(cloud_roi, obstacles, out_point);
+
+  // 【步骤2】山腰策略：高度差的均值，优先ABC阈值范围内的点
+  if (!found) {
+    std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] Step 2: Try mountain waist strategy" << std::endl;
+    found = findMountainWaistPoint(cloud_roi, obstacles, out_point);
   }
 
-  // 【步骤4】如果平面/山腰策略失败，尝试随机模式
+  // 【步骤3】扩大搜索：扩大方格20%，防止在边缘有合适的点
   if (!found) {
-    std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] Primary strategy failed, trying RANDOM mode" << std::endl;
-    found = searchWithRandomMode(cloud_roi, obstacles, out_point);
+    std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] Step 3: Try expanded region strategy" << std::endl;
+    found = findExpandedRegionPoint(cloud_roi, obstacles, out_point);
   }
 
-  // 【步骤5】如果随机模式也失败，使用备用方案
-  if (!found) {
-    std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] RANDOM mode failed, using fallback" << std::endl;
-    found = searchWithCriteria(cloud_roi, obstacles,
-                               0.5,  // 非常宽松的法向阈值
-                               0.01, // 非常宽松的避障距离
-                               1.0,  // 非常宽松的曲率阈值
-                               out_point,
-                               false, // is_large_plane = false
-                               false, // is_plane = false
-                               z_target); // [新增] 目标高度
-  }
-  
-  // 【步骤6】更新状态
+  // 【步骤4】更新状态
   if (found) {
     state_ = STATE_COMPLETED;
     last_point_ = out_point;
     has_last_point_ = true;
-    std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] Found point successfully!" << std::endl;
+    std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] Point found successfully!" << std::endl;
     return true;
   } else {
     state_ = STATE_UNREACHABLE;
     std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] All strategies failed, marking as UNREACHABLE" << std::endl;
     return false;
   }
-  state_ = STATE_UNREACHABLE;
-  std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] All attempts failed, marking as UNREACHABLE" << std::endl;
-  return false;
 }
 
 bool ChiselBox::searchWithCriteria(
@@ -957,6 +908,270 @@ bool ChiselBox::isPositionTooClose(const pcl::PointXYZRGBNormal& current_point,
   }
 
   return is_too_close;
+}
+
+// [新增] 简化策略：在平面中心凿击
+bool ChiselBox::findPlaneCenterPoint(pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud,
+                                     pcl::PointCloud<pcl::PointXYZ>::Ptr obstacles,
+                                     pcl::PointXYZRGBNormal &result) {
+  if (cloud->empty()) return false;
+
+  // 计算平均曲率
+  float avg_curv = 0.0f;
+  for (const auto &pt : cloud->points) {
+    avg_curv += pt.curvature;
+  }
+  avg_curv /= cloud->size();
+
+  // 识别曲率在均值左右浮动范围（CURVATURE_TOLERANCE）内的点作为平面
+  pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr flat_points(
+      new pcl::PointCloud<pcl::PointXYZRGBNormal>);
+  float curv_min = avg_curv - param_.CURVATURE_TOLERANCE;
+  float curv_max = avg_curv + param_.CURVATURE_TOLERANCE;
+
+  for (const auto &pt : cloud->points) {
+    if (pt.curvature >= curv_min && pt.curvature <= curv_max) {
+      flat_points->push_back(pt);
+    }
+  }
+
+  // 计算凸包面积
+  float flat_area = calculateConvexHullArea(flat_points);
+
+  // 如果面积 > 1平方cm，选择平面中心
+  if (flat_area > 0.0001f) {  // 1cm² = 0.0001m²
+    // 计算平面中心（所有平面点的平均值）
+    float center_x = 0.0f, center_y = 0.0f, center_z = 0.0f;
+    float center_nx = 0.0f, center_ny = 0.0f, center_nz = 0.0f;
+    int count = 0;
+
+    for (const auto &pt : flat_points->points) {
+      center_x += pt.x;
+      center_y += pt.y;
+      center_z += pt.z;
+      center_nx += pt.normal_x;
+      center_ny += pt.normal_y;
+      center_nz += pt.normal_z;
+      count++;
+    }
+
+    if (count > 0) {
+      center_x /= count;
+      center_y /= count;
+      center_z /= count;
+      center_nx /= count;
+      center_ny /= count;
+      center_nz /= count;
+    }
+
+    // 归一化法向量
+    float norm = std::sqrt(center_nx * center_nx + center_ny * center_ny + center_nz * center_nz);
+    if (norm > 0.001f) {
+      center_nx /= norm;
+      center_ny /= norm;
+      center_nz /= norm;
+    }
+
+    // 构造结果点
+        result.x = center_x;
+        result.y = center_y;
+        result.z = center_z;
+        result.normal_x = center_nx;
+        result.normal_y = center_ny;
+        result.normal_z = center_nz;
+        result.curvature = avg_curv;
+    
+        // [重新启用] 曲率突变避让检查：平面中心点周围一定距离内不能有曲率突变的点
+        // 计算曲率的标准差
+        float curv_variance = 0.0f;
+        for (const auto &pt : cloud->points) {
+          float diff = pt.curvature - avg_curv;
+          curv_variance += diff * diff;
+        }
+        curv_variance /= cloud->size();
+        float curv_std = std::sqrt(curv_variance);
+    
+        // 曲率突变阈值
+        float curv_outlier_threshold = avg_curv + param_.CURVATURE_OUTLIER_THRESHOLD * curv_std;
+    
+        // 检查平面中心点周围是否有曲率突变的点
+        float avoidance_dist_sq = param_.CURVATURE_AVOIDANCE_DISTANCE * param_.CURVATURE_AVOIDANCE_DISTANCE;
+        bool has_curvature_outlier_nearby = false;
+    
+        for (const auto &pt : cloud->points) {
+          // 计算距离
+          float dx = pt.x - center_x;
+          float dy = pt.y - center_y;
+          float dz = pt.z - center_z;
+          float dist_sq = dx * dx + dy * dy + dz * dz;
+    
+          // 如果在避让距离内，检查曲率突变
+          if (dist_sq < avoidance_dist_sq) {
+            if (pt.curvature > curv_outlier_threshold) {
+              has_curvature_outlier_nearby = true;
+              std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] Plane center rejected: curvature outlier nearby (dist: "
+                        << std::sqrt(dist_sq) * 1000.0f << "mm, curv: " << pt.curvature << " > threshold: " << curv_outlier_threshold << ")" << std::endl;
+              break;
+            }
+          }
+        }
+    
+        if (has_curvature_outlier_nearby) {
+          return false;  // 拒绝这个平面中心点
+        }
+    
+        std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] Plane center found (area: " << flat_area * 10000.0f
+                  << " cm², avg_curv: " << avg_curv << ", outlier check passed)" << std::endl;
+    return true;
+  }
+
+  return false;
+}
+
+// [新增] 简化策略：在山腰位置凿击（高度差的均值）
+bool ChiselBox::findMountainWaistPoint(pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud,
+                                      pcl::PointCloud<pcl::PointXYZ>::Ptr obstacles,
+                                      pcl::PointXYZRGBNormal &result) {
+  if (cloud->empty()) return false;
+
+  // 计算高度范围
+  float z_min = std::numeric_limits<float>::max();
+  float z_max = -std::numeric_limits<float>::max();
+  for (const auto &pt : cloud->points) {
+    if (pt.z < z_min) z_min = pt.z;
+    if (pt.z > z_max) z_max = pt.z;
+  }
+  float z_range = z_max - z_min;
+
+  // 山腰位置：高度差的均值
+  float z_waist = (z_min + z_max) / 2.0f;
+
+  std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] Mountain waist: z_waist = " << z_waist * 1000.0f 
+            << "mm (range: " << z_range * 1000.0f << "mm)" << std::endl;
+
+  // 寻找接近山腰高度且满足ABC阈值的点
+  float best_score = -std::numeric_limits<float>::infinity();
+  int best_idx = -1;
+
+  for (size_t i = 0; i < cloud->size(); ++i) {
+    const auto &pt = cloud->points[i];
+
+    // 接近山腰高度（±1cm）
+    if (std::abs(pt.z - z_waist) > 0.01f) continue;
+
+    // 法向趋同检查
+    if (has_last_point_ && isNormalSimilar(pt, last_point_)) continue;
+
+    // 位置距离检查
+    if (has_last_point_ && isPositionTooClose(pt, last_point_)) continue;
+
+    // 避障检查
+    bool clash = false;
+    if (obstacles && !obstacles->empty()) {
+      for (const auto &obs : obstacles->points) {
+        float dx = pt.x - obs.x;
+        float dy = pt.y - obs.y;
+        float dist_sq = dx * dx + dy * dy;
+        if (dist_sq < param_.MOUNTAIN_HOLE_DIST * param_.MOUNTAIN_HOLE_DIST) {
+          clash = true;
+          break;
+        }
+      }
+    }
+    if (clash) continue;
+
+    // 评分：优先选择法向接近X轴的点（ABC阈值范围）
+    float score = pt.normal_x;  // 法向X分量越大，分数越高
+
+    if (score > best_score) {
+      best_score = score;
+      best_idx = i;
+    }
+  }
+
+  if (best_idx >= 0) {
+    result = cloud->points[best_idx];
+    std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] Mountain waist point found (normal_x: " 
+              << result.normal_x << ", z: " << result.z * 1000.0f << "mm)" << std::endl;
+    return true;
+  }
+
+  return false;
+}
+
+// [新增] 简化策略：扩大搜索区域（20%）
+bool ChiselBox::findExpandedRegionPoint(pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud,
+                                       pcl::PointCloud<pcl::PointXYZ>::Ptr obstacles,
+                                       pcl::PointXYZRGBNormal &result) {
+  if (cloud->empty()) return false;
+
+  // 计算cell边界
+  float cell_min_x = param_.XMIN + col_ * param_.BOX_LEN;
+  float cell_max_x = param_.XMIN + (col_ + 1) * param_.BOX_LEN;
+  float cell_min_y = param_.YMIN + row_ * param_.BOX_LEN;
+  float cell_max_y = param_.YMIN + (row_ + 1) * param_.BOX_LEN;
+
+  // 扩大20%
+  float expand_factor = 0.2f;
+  float expand_x = (cell_max_x - cell_min_x) * expand_factor;
+  float expand_y = (cell_max_y - cell_min_y) * expand_factor;
+
+  float expanded_min_x = cell_min_x - expand_x;
+  float expanded_max_x = cell_max_x + expand_x;
+  float expanded_min_y = cell_min_y - expand_y;
+  float expanded_max_y = cell_max_y + expand_y;
+
+  // 在扩大区域内寻找最佳点
+  float best_score = -std::numeric_limits<float>::infinity();
+  int best_idx = -1;
+
+  for (size_t i = 0; i < cloud->size(); ++i) {
+    const auto &pt = cloud->points[i];
+
+    // 检查是否在扩大区域内
+    if (pt.x < expanded_min_x || pt.x > expanded_max_x ||
+        pt.y < expanded_min_y || pt.y > expanded_max_y) {
+      continue;
+    }
+
+    // 法向趋同检查
+    if (has_last_point_ && isNormalSimilar(pt, last_point_)) continue;
+
+    // 位置距离检查
+    if (has_last_point_ && isPositionTooClose(pt, last_point_)) continue;
+
+    // 避障检查
+    bool clash = false;
+    if (obstacles && !obstacles->empty()) {
+      for (const auto &obs : obstacles->points) {
+        float dx = pt.x - obs.x;
+        float dy = pt.y - obs.y;
+        float dist_sq = dx * dx + dy * dy;
+        if (dist_sq < param_.MOUNTAIN_HOLE_DIST * param_.MOUNTAIN_HOLE_DIST) {
+          clash = true;
+          break;
+        }
+      }
+    }
+    if (clash) continue;
+
+    // 评分：优先选择法向接近X轴的点
+    float score = pt.normal_x;  // 法向X分量越大，分数越高
+
+    if (score > best_score) {
+      best_score = score;
+      best_idx = i;
+    }
+  }
+
+  if (best_idx >= 0) {
+    result = cloud->points[best_idx];
+    std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] Expanded region point found (normal_x: " 
+              << result.normal_x << ", z: " << result.z * 1000.0f << "mm)" << std::endl;
+    return true;
+  }
+
+  return false;
 }
 
 } // namespace chisel_box

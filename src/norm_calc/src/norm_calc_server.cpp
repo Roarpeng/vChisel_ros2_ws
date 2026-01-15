@@ -168,6 +168,15 @@ private:
     param_.NORMAL_SIMILARITY_THRESHOLD = this->declare_parameter("NORMAL_SIMILARITY_THRESHOLD", 0.17);
     param_.POSITION_DISTANCE_THRESHOLD = this->declare_parameter("POSITION_DISTANCE_THRESHOLD", 0.03);
 
+    // [新增] 读取曲率避让参数（平面点避开曲率大于均值区域）
+    param_.CURVATURE_AVOIDANCE_DISTANCE = this->declare_parameter("CURVATURE_AVOIDANCE_DISTANCE", 0.02);
+
+    // [新增] 读取曲率浮动范围参数（用于平面识别）
+    param_.CURVATURE_TOLERANCE = this->declare_parameter("CURVATURE_TOLERANCE", 0.2);
+
+    // [新增] 读取曲率突变参数（用于避开曲率突变区域）
+    param_.CURVATURE_OUTLIER_THRESHOLD = this->declare_parameter("CURVATURE_OUTLIER_THRESHOLD", 3.0);
+
     // 读取手眼标定矩阵参数
     std::vector<double> row1 = this->declare_parameter(
       "hand_eye_calibration.row1",
@@ -326,6 +335,21 @@ private:
           } else if (param.get_name() == "RANDOM_ANGLE_RANGE") {
             param_.RANDOM_ANGLE_RANGE = param.as_double();
             RCLCPP_INFO(this->get_logger(), "Parameter updated: RANDOM_ANGLE_RANGE = %f", param_.RANDOM_ANGLE_RANGE);
+          }
+          // 曲率避让参数
+          else if (param.get_name() == "CURVATURE_AVOIDANCE_DISTANCE") {
+            param_.CURVATURE_AVOIDANCE_DISTANCE = param.as_double();
+            RCLCPP_INFO(this->get_logger(), "Parameter updated: CURVATURE_AVOIDANCE_DISTANCE = %f", param_.CURVATURE_AVOIDANCE_DISTANCE);
+          }
+          // 曲率浮动范围参数（用于平面识别）
+          else if (param.get_name() == "CURVATURE_TOLERANCE") {
+            param_.CURVATURE_TOLERANCE = param.as_double();
+            RCLCPP_INFO(this->get_logger(), "Parameter updated: CURVATURE_TOLERANCE = %f", param_.CURVATURE_TOLERANCE);
+          }
+          // 曲率突变参数（用于避开曲率突变区域）
+          else if (param.get_name() == "CURVATURE_OUTLIER_THRESHOLD") {
+            param_.CURVATURE_OUTLIER_THRESHOLD = param.as_double();
+            RCLCPP_INFO(this->get_logger(), "Parameter updated: CURVATURE_OUTLIER_THRESHOLD = %f", param_.CURVATURE_OUTLIER_THRESHOLD);
           }
           // 其他参数（不存储在ChiselParam中，只在norm_calc_server中使用）
           else {
