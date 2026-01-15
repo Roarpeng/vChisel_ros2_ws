@@ -134,6 +134,12 @@ private:
     // [新增] 读取平面判定参数
     param_.FLAT_CURV_TH = this->declare_parameter("FLAT_CURV_TH", 0.03);
 
+    // [新增] 读取山腰深坑防滑参数
+    param_.MOUNTAIN_HOLE_DIST = this->declare_parameter("MOUNTAIN_HOLE_DIST", 0.04);
+    param_.MOUNTAIN_NORM_TH = this->declare_parameter("MOUNTAIN_NORM_TH", 0.82);
+    param_.HOLE_SAFE_DIST = this->declare_parameter("HOLE_SAFE_DIST", 0.05);
+    param_.ENABLE_HOLE_DIR_CHECK = this->declare_parameter("ENABLE_HOLE_DIR_CHECK", true);
+
     // 读取手眼标定矩阵参数
     std::vector<double> row1 = this->declare_parameter(
       "hand_eye_calibration.row1",

@@ -215,16 +215,64 @@ bool ChiselBox::searchWithCriteria(
 
     // --- 2. 避障过滤 (Obstacle Filter) ---
     bool clash = false;
+    float min_hole_dist = std::numeric_limits<float>::max();
+    bool points_to_hole = false;
+    
     if (obstacles && !obstacles->empty()) {
+      // 【动态避障距离】
+      // 山腰位置使用更大的避障距离，防止滑入深坑
+      float dynamic_hole_dist = is_protrusion ? param_.MOUNTAIN_HOLE_DIST : hole_dist_th;
+      float dynamic_dist_sq_th = dynamic_hole_dist * dynamic_hole_dist;
+      
       for (const auto &obs : obstacles->points) {
         float dx = pt.x - obs.x;
         float dy = pt.y - obs.y;
-        if (dx * dx + dy * dy < dist_sq_th) {
+        float dist_sq = dx * dx + dy * dy;
+        
+        // 记录最小深坑距离
+        if (dist_sq < min_hole_dist) {
+          min_hole_dist = dist_sq;
+        }
+        
+        // 距离检查
+        if (dist_sq < dynamic_dist_sq_th) {
           clash = true;
           break;
         }
+        
+        // 【深坑方向检查】（仅在山腰位置且启用时）
+        if (is_protrusion && param_.ENABLE_HOLE_DIR_CHECK) {
+          // 计算指向深坑的向量
+          float hole_dir_x = obs.x - pt.x;
+          float hole_dir_y = obs.y - pt.y;
+          // 归一化指向深坑的向量
+          float hole_dir_len = std::sqrt(hole_dir_x * hole_dir_x + hole_dir_y * hole_dir_y);
+          if (hole_dir_len > 0.001f) {
+            hole_dir_x /= hole_dir_len;
+            hole_dir_y /= hole_dir_len;
+            
+            // 计算法向量与指向深坑向量的夹角
+            // 法向量在XY平面的投影
+            float normal_xy_len = std::sqrt(pt.normal_x * pt.normal_x + pt.normal_y * pt.normal_y);
+            if (normal_xy_len > 0.001f) {
+              float normal_xy_x = pt.normal_x / normal_xy_len;
+              float normal_xy_y = pt.normal_y / normal_xy_len;
+              
+              // 计算点积（夹角的余弦）
+              float dot_product = normal_xy_x * hole_dir_x + normal_xy_y * hole_dir_y;
+              
+              // 如果点积 > 0，说明法向量指向深坑方向（夹角 < 90度）
+              if (dot_product > 0.0f) {
+                points_to_hole = true;
+                clash = true;
+                break;
+              }
+            }
+          }
+        }
       }
     }
+    
     if (clash) {
       filtered_by_obstacle++;
       continue;
@@ -251,8 +299,35 @@ bool ChiselBox::searchWithCriteria(
         score += param_.HEIGHT_WEIGHT * pt.z * 0.5f;  // 其他位置弱化高度权重
       }
 
-      // 3. 极度强调法向垂直度：半山腰下刀，必须保证不滑
-      score += param_.ANGLE_WEIGHT * std::abs(pt.normal_z) * 1.5f;
+      // 3. 【深坑距离权重】：优先选择远离深坑的点
+      if (min_hole_dist < std::numeric_limits<float>::max()) {
+        float hole_dist = std::sqrt(min_hole_dist);
+        // 如果距离深坑 > 5cm，给予额外奖励
+        if (hole_dist > param_.HOLE_SAFE_DIST) {
+          score += param_.CENTER_WEIGHT * 2.0f;  // 远离深坑加倍奖励
+        } else {
+          // 距离越近，惩罚越大
+          score -= param_.CENTER_WEIGHT * (param_.HOLE_SAFE_DIST - hole_dist) * 10.0f;
+        }
+      }
+
+      // 4. 【动态法向角度限制】：根据距离深坑的距离动态调整法向角度权重
+      // 距离深坑 > 5cm：法向角度放宽到35°（cos(35°)≈0.82）
+      // 距离深坑 3-5cm：法向角度适中25°（cos(25°)≈0.91）
+      // 距离深坑 < 3cm：法向角度严格16°（cos(16°)≈0.90）
+      float norm_weight = param_.ANGLE_WEIGHT;
+      if (min_hole_dist < std::numeric_limits<float>::max()) {
+        float hole_dist = std::sqrt(min_hole_dist);
+        if (hole_dist < 0.03f) {
+          // 距离深坑 < 3cm：极度强调法向垂直度
+          norm_weight *= 2.0f;
+        } else if (hole_dist < param_.HOLE_SAFE_DIST) {
+          // 距离深坑 3-5cm：适度强调法向垂直度
+          norm_weight *= 1.5f;
+        }
+        // 距离深坑 > 5cm：使用正常权重
+      }
+      score += norm_weight * std::abs(pt.normal_z);
     } else {
       // 【平面策略评分】 (原有逻辑)
       // 优先打稍微凸起一点的地方（好破碎）

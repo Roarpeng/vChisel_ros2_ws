@@ -44,6 +44,12 @@ typedef struct {
   float TIP_CROP_RATIO;  // 切顶比例（基准值，会根据高度差动态调整）
   float BASE_CROP_RATIO; // 切底比例
 
+  // [新增] 山腰深坑防滑参数
+  float MOUNTAIN_HOLE_DIST;  // 山腰位置的深坑安全距离（3-4cm）
+  float MOUNTAIN_NORM_TH;    // 山腰位置的法向角度阈值（35度，cos(35°)≈0.82）
+  float HOLE_SAFE_DIST;      // 深坑安全距离阈值（5cm，用于动态调整法向角度）
+  bool ENABLE_HOLE_DIR_CHECK; // 是否启用深坑方向检查
+
   // [新增] 随机模式参数
   float RANDOM_OFFSET_RANGE;  // 随机位置偏移范围
   float RANDOM_ANGLE_RANGE;   // 随机法向角度范围
