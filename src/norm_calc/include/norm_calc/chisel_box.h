@@ -69,6 +69,14 @@ typedef struct {
   // [新增] 目标高度和Cell停止参数
   float DELTA_Z;              // 期望削减量（米，每次凿击期望下降的高度）
   float CELL_FLAT_THRESHOLD;  // Cell停止阈值（米，高度差小于此值时标记为完成）
+
+  // [新增] 混合策略参数（平面优先和评分权重优化）
+  float FLAT_POINT_BONUS;     // 平面点奖励（平面优先）
+  float CURVATURE_THRESHOLD;  // 曲率阈值（用于平面识别）
+  float CELL_STD_THRESHOLD;   // Cell停止标准差阈值（米）
+
+  // [新增] 法向趋同约束参数（防止重复凿击）
+  float NORMAL_SIMILARITY_THRESHOLD;  // 法向趋同阈值（弧度，法向角度差小于此值时认为趋同）
 } ChiselParam;
 
 // [新增] 局部参考平面结构体
@@ -133,6 +141,13 @@ private:
 
   // [新增] 检查Cell是否完成（高度差小于阈值）
   bool isCellComplete(pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud);
+
+  // [新增] 计算点云的标准差（用于Cell停止条件）
+  float calculateStandardDeviation(pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud);
+
+  // [新增] 检查法向是否趋同（防止重复凿击）
+  bool isNormalSimilar(const pcl::PointXYZRGBNormal& current_point,
+                      const pcl::PointXYZRGBNormal& last_point);
 
   // 内部通用搜索逻辑
   bool searchWithCriteria(pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud,

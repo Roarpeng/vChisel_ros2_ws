@@ -433,12 +433,9 @@ bool ChiselBox::searchWithCriteria(
       }
     }
 
-    // [新增] 硬约束：禁止凿击低于或等于目标高度的点
+    // [新增] 软化硬约束：不再严格禁止低于或等于目标高度的点，而是在评分中给予巨大惩罚
     float height_residual = pt.z - z_target;  // 重新定义：相对于目标高度的残差
-    if (height_residual <= 0.0f) {
-      filtered_by_height++;
-      continue;
-    }
+    bool is_below_target = (height_residual <= 0.0f);
 
     // --- 3. 智能评分 (Scoring) ---
     float dist_center =
@@ -452,27 +449,46 @@ bool ChiselBox::searchWithCriteria(
 
     float score = 0.0f;
 
-    // [新增] 新的评分函数（均匀下降导向）
-    // 1. 优先整体平面下压（高度残差越大，分数越高）
-    score += 1.0f * height_residual * 1000.0f;  // 乘以1000转换为mm，提高数值范围
-
-    // 2. 抑制偏离平面的山腰点（点到局部平面的距离）
-    if (has_valid_plane) {
-      score -= 0.5f * dist_to_plane * 1000.0f;  // 乘以1000转换为mm
+    // [新增] 软化硬约束：对低于目标高度的点给予巨大惩罚
+    if (is_below_target) {
+      score -= 1000.0f;  // 给予巨大惩罚，但不完全禁止
     }
 
-    // 3. 抑制尖锐边缘（曲率）
-    score -= 0.3f * pt.curvature * 100.0f;  // 乘以100提高数值范围
+    // [新增] 法向趋同约束：防止重复凿击同一位置
+    if (has_last_point_) {
+      if (isNormalSimilar(pt, last_point_)) {
+        score -= 2000.0f;  // 法向趋同给予巨大惩罚
+      }
+    }
 
-    // 4. 法向垂直度（保留原有逻辑，但降低权重）
+    // [新增] 新的评分函数（平面优先 + 均匀下降导向）
+
+    // 1. 平面优先（权重最高）：识别平面点并给予巨大奖励
+    bool is_flat_point = (pt.curvature < param_.CURVATURE_THRESHOLD);
+    if (is_flat_point) {
+      score += param_.FLAT_POINT_BONUS;  // 平面点给予巨大奖励
+    }
+
+    // 2. 优先整体平面下压（高度残差越大，分数越高）
+    score += 10.0f * height_residual * 1000.0f;  // 从1.0改为10.0，提高权重
+
+    // 3. 抑制偏离平面的山腰点（点到局部平面的距离）
+    if (has_valid_plane) {
+      score -= 5.0f * dist_to_plane * 1000.0f;  // 从0.5改为5.0，提高权重
+    }
+
+    // 4. 抑制尖锐边缘（曲率）
+    score -= 3.0f * pt.curvature * 100.0f;  // 从0.3改为3.0，提高权重
+
+    // 5. 法向垂直度（保留原有逻辑，但降低权重）
     score += 0.2f * param_.ANGLE_WEIGHT * pt.normal_x;
 
-    // 5. 避障距离（保留原有逻辑，但降低权重）
+    // 6. 避障距离（保留原有逻辑，但降低权重）
     if (min_hole_dist < std::numeric_limits<float>::max()) {
       score += 0.1f * param_.CENTER_WEIGHT * std::sqrt(min_hole_dist);
     }
 
-    // 6. 中心位置（弱化）
+    // 7. 中心位置（弱化）
     score -= 0.05f * dist_center;
 
     if (score > best_score) {
@@ -789,15 +805,85 @@ bool ChiselBox::isCellComplete(pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr clou
 
   float z_range = z_max - z_min;
 
-  bool is_complete = (z_range < param_.CELL_FLAT_THRESHOLD);
+  // 计算标准差
+  float z_std = calculateStandardDeviation(cloud);
+
+  // [新增] 增加标准差检查
+  bool is_complete = (z_range < param_.CELL_FLAT_THRESHOLD) && (z_std < param_.CELL_STD_THRESHOLD);
 
   if (is_complete) {
     std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] Cell is complete (z_range: "
-              << z_range * 1000.0f << "mm < threshold: "
-              << param_.CELL_FLAT_THRESHOLD * 1000.0f << "mm)" << std::endl;
+              << z_range * 1000.0f << "mm < threshold: " << param_.CELL_FLAT_THRESHOLD * 1000.0f
+              << "mm, z_std: " << z_std * 1000.0f << "mm < threshold: "
+              << param_.CELL_STD_THRESHOLD * 1000.0f << "mm)" << std::endl;
   }
 
   return is_complete;
+}
+
+// [新增] 计算点云的标准差（用于Cell停止条件）
+float ChiselBox::calculateStandardDeviation(pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud) {
+  if (cloud->empty()) {
+    return 0.0f;
+  }
+
+  // 计算平均值
+  float z_sum = 0.0f;
+  for (const auto& pt : cloud->points) {
+    z_sum += pt.z;
+  }
+  float z_mean = z_sum / cloud->size();
+
+  // 计算标准差
+  float variance_sum = 0.0f;
+  for (const auto& pt : cloud->points) {
+    float diff = pt.z - z_mean;
+    variance_sum += diff * diff;
+  }
+  float variance = variance_sum / cloud->size();
+  float std_dev = std::sqrt(variance);
+
+  return std_dev;
+}
+
+// [新增] 检查法向是否趋同（防止重复凿击）
+bool ChiselBox::isNormalSimilar(const pcl::PointXYZRGBNormal& current_point,
+                                const pcl::PointXYZRGBNormal& last_point) {
+  // 计算两个法向量的夹角
+  // 使用点积公式：cos(θ) = (n1 · n2) / (|n1| * |n2|)
+  Eigen::Vector3f n1(current_point.normal_x, current_point.normal_y, current_point.normal_z);
+  Eigen::Vector3f n2(last_point.normal_x, last_point.normal_y, last_point.normal_z);
+
+  // 归一化法向量
+  float n1_norm = n1.norm();
+  float n2_norm = n2.norm();
+
+  if (n1_norm < 0.001f || n2_norm < 0.001f) {
+    return false;  // 法向量无效，不认为趋同
+  }
+
+  n1 /= n1_norm;
+  n2 /= n2_norm;
+
+  // 计算点积（夹角的余弦）
+  float dot_product = n1.dot(n2);
+
+  // 限制在 [-1, 1] 范围内（避免浮点误差）
+  dot_product = std::max(-1.0f, std::min(1.0f, dot_product));
+
+  // 计算夹角（弧度）
+  float angle = std::acos(dot_product);
+
+  // 如果夹角小于阈值，认为法向趋同
+  bool is_similar = (angle < param_.NORMAL_SIMILARITY_THRESHOLD);
+
+  if (is_similar) {
+    std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] Normal is similar (angle: "
+              << angle * 180.0f / M_PI << "° < threshold: "
+              << param_.NORMAL_SIMILARITY_THRESHOLD * 180.0f / M_PI << "°)" << std::endl;
+  }
+
+  return is_similar;
 }
 
 } // namespace chisel_box

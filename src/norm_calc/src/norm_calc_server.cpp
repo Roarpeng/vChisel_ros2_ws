@@ -159,6 +159,14 @@ private:
     param_.DELTA_Z = this->declare_parameter("DELTA_Z", 0.001);
     param_.CELL_FLAT_THRESHOLD = this->declare_parameter("CELL_FLAT_THRESHOLD", 0.001);
 
+    // [新增] 读取混合策略参数（平面优先和评分权重优化）
+    param_.FLAT_POINT_BONUS = this->declare_parameter("FLAT_POINT_BONUS", 100.0);
+    param_.CURVATURE_THRESHOLD = this->declare_parameter("CURVATURE_THRESHOLD", 0.03);
+    param_.CELL_STD_THRESHOLD = this->declare_parameter("CELL_STD_THRESHOLD", 0.001);
+
+    // [新增] 读取法向趋同约束参数（防止重复凿击）
+    param_.NORMAL_SIMILARITY_THRESHOLD = this->declare_parameter("NORMAL_SIMILARITY_THRESHOLD", 0.17);
+
     // 读取手眼标定矩阵参数
     std::vector<double> row1 = this->declare_parameter(
       "hand_eye_calibration.row1",
