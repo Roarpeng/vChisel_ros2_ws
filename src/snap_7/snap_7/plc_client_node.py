@@ -446,6 +446,17 @@ class PLCClientNode(Node):
                 return
 
             try:
+                # 【新增】在启动新相机之前，先终止所有旧的相机进程
+                # 防止多个相机进程同时运行导致图像混乱
+                self.get_logger().info('Cleaning up old camera processes...')
+                try:
+                    subprocess.run(['pkill', '-f', 'realsense2_camera'], 
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    time.sleep(1)  # 等待进程完全终止
+                    self.get_logger().info('Old camera processes cleaned up')
+                except Exception as e:
+                    self.get_logger().warning(f'Failed to clean up old camera processes: {e}')
+                
                 # 修改相机启动参数，提高帧率从10到15fps，并禁用一些可能导致缓存的选项
                 cmd = ['ros2', 'run', 'realsense2_camera', 'realsense2_camera_node',
                        '--ros-args', 
@@ -731,6 +742,14 @@ class PLCClientNode(Node):
         if len(resp.pose_list.poses) > 0:
             for i, pose in enumerate(resp.pose_list.poses):
                 if i < 24:  # Only process first 24 poses
+                    # 提取位置坐标
+                    x, y, z = pose.position.x, pose.position.y, pose.position.z
+                    
+                    # 【新增】坐标过滤：如果 X < 0 或 Z > 0，则丢弃该点
+                    if x < 0 or z > 0:
+                        self.get_logger().warning(f'Filtered out point {i}: X={x:.4f}, Z={z:.4f} (X<0 or Z>0)')
+                        continue
+                    
                     # 将四元数转换为欧拉角（ZYX顺序，即ABC）
                     qx, qy, qz, qw = pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w
                     euler_rad = self.quaternion_to_euler_zyx(qx, qy, qz, qw)
@@ -740,7 +759,7 @@ class PLCClientNode(Node):
 
                     # 添加位置和欧拉角数据（ABC，弧度）
                     vals = [
-                        pose.position.x, pose.position.y, pose.position.z,
+                        x, y, z,
                         clamped_euler_rad[0], clamped_euler_rad[1], clamped_euler_rad[2]  # A(Z), B(Y), C(X) 角度（弧度）
                     ]
                     output_data.extend(vals)
@@ -758,7 +777,7 @@ class PLCClientNode(Node):
         pose_write_success = self.write_real_array_to_db(output_data, start=20)
         
         # Write pointNum to offset 18 (still as integer)
-        pointNum = min(len(resp.pose_list.poses), 24)  # Limit to 24 points maximum
+        pointNum = len(output_data) // 6  # 计算过滤后的实际点位数量（每个点6个值）
         self.get_logger().debug(f'Attempting to write point count {pointNum} to offset 18')
         pointnum_write_success = self.write_registers_uint16([int(pointNum) & 0xFFFF], start=18)
         
