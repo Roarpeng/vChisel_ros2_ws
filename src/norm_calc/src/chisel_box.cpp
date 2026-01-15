@@ -1,6 +1,8 @@
 #include "norm_calc/chisel_box.h"
 #include <iostream>
 #include <limits>
+#include <algorithm>
+#include <vector>
 #include <pcl/surface/convex_hull.h>
 #include <pcl/sample_consensus/method_types.h>
 #include <pcl/sample_consensus/model_types.h>
@@ -27,8 +29,15 @@ bool ChiselBox::findBestPoint(
   if (cloud_roi->empty())
     return false;
 
+  // [新增] Cell停止条件检查：如果Cell已经足够平坦，标记为完成
+  if (isCellComplete(cloud_roi)) {
+    state_ = STATE_COMPLETED;
+    std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] Cell marked as COMPLETED (already flat enough)" << std::endl;
+    return false;
+  }
+
   // === 平面优先策略 ===
-  
+
   // 【步骤1】计算凸包面积和平均曲率
   float area = calculateConvexHullArea(cloud_roi);
   
@@ -42,14 +51,17 @@ bool ChiselBox::findBestPoint(
   // 【步骤2】判断是否为平面
   // 平面判定：面积 > 1平方cm 且 曲率 < 0.035
   bool is_plane = (area > param_.PLANE_AREA_TH) && (avg_curv < param_.PLANE_CURV_TH);
-  
-  std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] Area: " << area * 10000.0f 
-            << " cm², Avg-curv: " << avg_curv << ", Is-plane: " 
+
+  std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] Area: " << area * 10000.0f
+            << " cm², Avg-curv: " << avg_curv << ", Is-plane: "
             << (is_plane ? "YES" : "NO") << std::endl;
-  
+
+  // [新增] 计算目标高度（用于均匀下降导向）
+  float z_target = calculateTargetHeight(cloud_roi);
+
   // 【步骤3】根据表面类型选择策略
   bool found = false;
-  
+
   if (is_plane) {
     // 【平面策略】：垂直凿击
     std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] Using PLANE strategy" << std::endl;
@@ -59,7 +71,8 @@ bool ChiselBox::findBestPoint(
                                param_.PLANE_CURV_TH,      // 曲率阈值
                                out_point,
                                true,  // is_large_plane = true
-                               true); // is_plane = true
+                               true,  // is_plane = true
+                               z_target); // [新增] 目标高度
   } else {
     // 【山腰策略】：凹凸不平时的最佳凿击位置
     std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] Using MOUNTAIN strategy" << std::endl;
@@ -69,15 +82,16 @@ bool ChiselBox::findBestPoint(
                                0.15,                     // 曲率阈值（宽松）
                                out_point,
                                false, // is_large_plane = false
-                               false); // is_plane = false
+                               false, // is_plane = false
+                               z_target); // [新增] 目标高度
   }
-  
+
   // 【步骤4】如果平面/山腰策略失败，尝试随机模式
   if (!found) {
     std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] Primary strategy failed, trying RANDOM mode" << std::endl;
     found = searchWithRandomMode(cloud_roi, obstacles, out_point);
   }
-  
+
   // 【步骤5】如果随机模式也失败，使用备用方案
   if (!found) {
     std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] RANDOM mode failed, using fallback" << std::endl;
@@ -87,7 +101,8 @@ bool ChiselBox::findBestPoint(
                                1.0,  // 非常宽松的曲率阈值
                                out_point,
                                false, // is_large_plane = false
-                               false); // is_plane = false
+                               false, // is_plane = false
+                               z_target); // [新增] 目标高度
   }
   
   // 【步骤6】更新状态
@@ -111,7 +126,7 @@ bool ChiselBox::searchWithCriteria(
     pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud,
     pcl::PointCloud<pcl::PointXYZ>::Ptr obstacles, float norm_th,
     float hole_dist_th, float curv_th, pcl::PointXYZRGBNormal &result,
-    bool is_large_plane, bool is_plane) {
+    bool is_large_plane, bool is_plane, float z_target) {
   if (cloud->empty())
     return false;
 
@@ -418,123 +433,47 @@ bool ChiselBox::searchWithCriteria(
       }
     }
 
+    // [新增] 硬约束：禁止凿击低于或等于目标高度的点
+    float height_residual = pt.z - z_target;  // 重新定义：相对于目标高度的残差
+    if (height_residual <= 0.0f) {
+      filtered_by_height++;
+      continue;
+    }
+
     // --- 3. 智能评分 (Scoring) ---
     float dist_center =
         std::sqrt(std::pow(pt.x - cx, 2) + std::pow(pt.y - cy, 2));
 
-    // [新增] 计算高度残差（相对于局部参考平面）
-    float height_residual = 0.0f;
+    // [新增] 计算点到局部平面的距离（用于抑制山腰点）
+    float dist_to_plane = 0.0f;
     if (has_valid_plane) {
-      height_residual = calculateHeightResidual(pt, local_plane);
+      dist_to_plane = std::abs(calculateHeightResidual(pt, local_plane));
     }
 
     float score = 0.0f;
 
-    if (is_plane) {
-      // 【平面策略评分】：垂直凿击
-      // 1. 平面位置奖励
-      score += param_.PLANE_BONUS;  // 平面位置额外奖励
+    // [新增] 新的评分函数（均匀下降导向）
+    // 1. 优先整体平面下压（高度残差越大，分数越高）
+    score += 1.0f * height_residual * 1000.0f;  // 乘以1000转换为mm，提高数值范围
 
-      // 2. 强调法向X分量（沿着凿击方向，垂直于墙面）
-      score += param_.ANGLE_WEIGHT * pt.normal_x;
-
-      // 3. 平整度奖励（曲率越小越好）
-      score -= param_.CURV_WEIGHT * pt.curvature;
-
-      // [新增] 4. 高度残差评分（已削平区域自动降低优先级）
-      if (has_valid_plane) {
-        // 如果高度残差接近0（已削平），给予轻微惩罚，降低优先级
-        if (std::abs(height_residual) < 0.005f) {  // 残差 < 5mm
-          score -= param_.RESIDUAL_WEIGHT * 2.0f;  // 已削平区域降低优先级
-        } else if (height_residual > 0.01f) {  // 凸起 > 1cm
-          score += param_.RESIDUAL_WEIGHT * height_residual * 5.0f;  // 凸起优先
-        }
-      }
-
-      // 5. 随机分布（不强调中心位置）
-      score -= param_.CENTER_WEIGHT * dist_center * 0.1f;
-
-    } else {
-      // 【山腰策略评分】：凹凸不平时的最佳凿击位置
-
-      // 1. 在有效区间内，优先选法向变化小（平整）的地方，防止打在棱上
-      score -= param_.CURV_WEIGHT * pt.curvature * 2.0f; // 加倍惩罚曲率
-
-      // [新增] 1.5. 高度残差评分（凸起优先）
-      if (has_valid_plane) {
-        if (height_residual > 0.01f) {  // 凸起 > 1cm
-          // 凸起程度越大，分数越高（凸起优先）
-          score += param_.RESIDUAL_WEIGHT * height_residual * 10.0f;
-        } else if (height_residual < -0.005f) {  // 凹陷 > 0.5cm
-          // 凹陷区域给予惩罚
-          score -= param_.RESIDUAL_WEIGHT * std::abs(height_residual) * 5.0f;
-        }
-      }
-
-      // 2. 【山腰优先】：优先选择高度在区间中间位置（山腰）的点
-      // 计算点在有效区间中的归一化位置（0=底部，1=顶部）
-      float normalized_height = (pt.z - valid_z_min) / (valid_z_max - valid_z_min);
-      // 山腰位置（0.4-0.6）给予额外加分
-      if (normalized_height >= 0.4f && normalized_height <= 0.6f) {
-        score += param_.HEIGHT_WEIGHT * 2.0f;  // 山腰位置加倍奖励
-      } else {
-        score += param_.HEIGHT_WEIGHT * pt.z * 0.5f;  // 其他位置弱化高度权重
-      }
-
-      // 3. 【深坑距离权重】：优先选择远离深坑的点
-      if (min_hole_dist < std::numeric_limits<float>::max()) {
-        float hole_dist = std::sqrt(min_hole_dist);
-        // 如果距离深坑 > 5cm，给予额外奖励
-        if (hole_dist > param_.HOLE_SAFE_DIST) {
-          score += param_.CENTER_WEIGHT * 2.0f;  // 远离深坑加倍奖励
-        } else {
-          // 距离越近，惩罚越大
-          score -= param_.CENTER_WEIGHT * (param_.HOLE_SAFE_DIST - hole_dist) * 10.0f;
-        }
-      }
-
-      // 4. 【动态法向角度限制】：根据距离深坑的距离动态调整法向角度权重
-      // X轴是凿击方向，要求法向X分量大（沿着凿击方向）
-      float norm_weight = param_.ANGLE_WEIGHT;
-      if (min_hole_dist < std::numeric_limits<float>::max()) {
-        float hole_dist = std::sqrt(min_hole_dist);
-        if (hole_dist < 0.03f) {
-          // 距离深坑 < 3cm：极度强调法向沿着凿击方向
-          norm_weight *= 2.5f;
-        } else if (hole_dist < param_.HOLE_SAFE_DIST) {
-          // 距离深坑 3-5cm：适度强调法向沿着凿击方向
-          norm_weight *= 2.0f;
-        }
-        // 距离深坑 > 5cm：使用正常权重
-      }
-      score += norm_weight * std::abs(pt.normal_x);  // 强调法向X分量（凿击方向）
-      
-      // 5. 【防滑移评分】：惩罚法向向下分量（Z轴是上下，重力方向）
-      // 如果法向有向下的分量（normal_z > 0），给予惩罚
-      if (pt.normal_z > 0.0f) {
-        float slide_penalty = pt.normal_z * param_.CENTER_WEIGHT * 20.0f;
-        score -= slide_penalty;
-      }
-      
-      // 6. 【坡度评分】：优先选择坡度小的位置
-      if (slope_angle > 0.0f) {
-        // 坡度越小，奖励越大
-        float slope_penalty = (slope_angle / param_.MAX_SLOPE_ANGLE) * param_.CURV_WEIGHT * 3.0f;
-        score -= slope_penalty;
-      }
-      
-      // 7. 【低洼区域距离评分】：优先选择远离低洼区域的点
-      if (min_depression_dist < std::numeric_limits<float>::max()) {
-        // 距离越近，惩罚越大
-        if (min_depression_dist < param_.DEPRESSION_DIST) {
-          float depression_penalty = (param_.DEPRESSION_DIST - min_depression_dist) * param_.CENTER_WEIGHT * 15.0f;
-          score -= depression_penalty;
-        }
-      }
+    // 2. 抑制偏离平面的山腰点（点到局部平面的距离）
+    if (has_valid_plane) {
+      score -= 0.5f * dist_to_plane * 1000.0f;  // 乘以1000转换为mm
     }
 
-    // 通用：优先打网格中心（但在全局补充时降低权重）
-    score -= param_.CENTER_WEIGHT * dist_center;
+    // 3. 抑制尖锐边缘（曲率）
+    score -= 0.3f * pt.curvature * 100.0f;  // 乘以100提高数值范围
+
+    // 4. 法向垂直度（保留原有逻辑，但降低权重）
+    score += 0.2f * param_.ANGLE_WEIGHT * pt.normal_x;
+
+    // 5. 避障距离（保留原有逻辑，但降低权重）
+    if (min_hole_dist < std::numeric_limits<float>::max()) {
+      score += 0.1f * param_.CENTER_WEIGHT * std::sqrt(min_hole_dist);
+    }
+
+    // 6. 中心位置（弱化）
+    score -= 0.05f * dist_center;
 
     if (score > best_score) {
       best_score = score;
@@ -792,6 +731,73 @@ float ChiselBox::calculateHeightResidual(const pcl::PointXYZRGBNormal& point, co
   }
 
   return signed_residual;
+}
+
+// [新增] 计算点云的中位数高度
+float ChiselBox::calculateMedian(pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud) {
+  if (cloud->empty()) {
+    return 0.0f;
+  }
+
+  // 提取所有Z值
+  std::vector<float> z_values;
+  z_values.reserve(cloud->size());
+  for (const auto& pt : cloud->points) {
+    z_values.push_back(pt.z);
+  }
+
+  // 排序
+  std::sort(z_values.begin(), z_values.end());
+
+  // 计算中位数
+  size_t n = z_values.size();
+  if (n % 2 == 0) {
+    // 偶数个点，取中间两个的平均值
+    return (z_values[n/2 - 1] + z_values[n/2]) / 2.0f;
+  } else {
+    // 奇数个点，取中间值
+    return z_values[n/2];
+  }
+}
+
+// [新增] 计算目标高度（中位数 - 期望削减量）
+float ChiselBox::calculateTargetHeight(pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud) {
+  float z_med = calculateMedian(cloud);
+  float z_target = z_med - param_.DELTA_Z;  // 目标高度 = 中位数 - 期望削减量
+
+  std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] Target height: "
+            << z_target * 1000.0f << "mm (median: " << z_med * 1000.0f
+            << "mm, delta: " << param_.DELTA_Z * 1000.0f << "mm)" << std::endl;
+
+  return z_target;
+}
+
+// [新增] 检查Cell是否完成（高度差小于阈值）
+bool ChiselBox::isCellComplete(pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud) {
+  if (cloud->empty()) {
+    return true;
+  }
+
+  // 计算Z范围
+  float z_min = std::numeric_limits<float>::max();
+  float z_max = -std::numeric_limits<float>::max();
+
+  for (const auto& pt : cloud->points) {
+    if (pt.z < z_min) z_min = pt.z;
+    if (pt.z > z_max) z_max = pt.z;
+  }
+
+  float z_range = z_max - z_min;
+
+  bool is_complete = (z_range < param_.CELL_FLAT_THRESHOLD);
+
+  if (is_complete) {
+    std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] Cell is complete (z_range: "
+              << z_range * 1000.0f << "mm < threshold: "
+              << param_.CELL_FLAT_THRESHOLD * 1000.0f << "mm)" << std::endl;
+  }
+
+  return is_complete;
 }
 
 } // namespace chisel_box

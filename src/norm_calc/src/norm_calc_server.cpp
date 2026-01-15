@@ -155,6 +155,10 @@ private:
     param_.RANSAC_THRESHOLD = this->declare_parameter("RANSAC_THRESHOLD", 0.005);
     param_.MIN_PLANE_POINTS = this->declare_parameter("MIN_PLANE_POINTS", 30);
 
+    // [新增] 读取目标高度和Cell停止参数
+    param_.DELTA_Z = this->declare_parameter("DELTA_Z", 0.001);
+    param_.CELL_FLAT_THRESHOLD = this->declare_parameter("CELL_FLAT_THRESHOLD", 0.001);
+
     // 读取手眼标定矩阵参数
     std::vector<double> row1 = this->declare_parameter(
       "hand_eye_calibration.row1",

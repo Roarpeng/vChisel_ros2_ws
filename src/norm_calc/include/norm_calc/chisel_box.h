@@ -65,6 +65,10 @@ typedef struct {
   float RESIDUAL_WEIGHT;      // 高度残差权重（凸起优先）
   float RANSAC_THRESHOLD;     // RANSAC平面拟合阈值（米）
   int MIN_PLANE_POINTS;       // RANSAC平面拟合最小点数
+
+  // [新增] 目标高度和Cell停止参数
+  float DELTA_Z;              // 期望削减量（米，每次凿击期望下降的高度）
+  float CELL_FLAT_THRESHOLD;  // Cell停止阈值（米，高度差小于此值时标记为完成）
 } ChiselParam;
 
 // [新增] 局部参考平面结构体
@@ -121,13 +125,23 @@ private:
   // [新增] 计算点相对于局部平面的高度残差
   float calculateHeightResidual(const pcl::PointXYZRGBNormal& point, const LocalPlane& plane);
 
+  // [新增] 计算点云的中位数高度
+  float calculateMedian(pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud);
+
+  // [新增] 计算目标高度（中位数 - 期望削减量）
+  float calculateTargetHeight(pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud);
+
+  // [新增] 检查Cell是否完成（高度差小于阈值）
+  bool isCellComplete(pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud);
+
   // 内部通用搜索逻辑
   bool searchWithCriteria(pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud,
                           pcl::PointCloud<pcl::PointXYZ>::Ptr obstacles,
                           float norm_th, float hole_dist_th, float curv_th,
                           pcl::PointXYZRGBNormal &result,
                           bool is_large_plane = false,
-                          bool is_plane = false);
+                          bool is_plane = false,
+                          float z_target = 0.0f);
 };
 
 } // namespace chisel_box
