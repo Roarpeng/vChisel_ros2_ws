@@ -26,39 +26,40 @@ typedef struct {
   float XMIN, XMAX; // [修复] 补全 XMAX
   float YMIN, YMAX; // [修复] 补全 YMAX
 
-  float STRICT_NORM_TH;
-  float STRICT_HOLE_DIST;
-  float STRICT_CURV_TH;
+  // [新增] 平面优先策略参数
+  float PLANE_AREA_TH;       // 平面面积阈值（1平方cm）
+  float PLANE_CURV_TH;       // 平面曲率阈值（< 0.035 认为平面）
+  float PLANE_NORM_TH;       // 平面法向阈值（cos(18°)≈0.95）
+  float PLANE_HOLE_DIST;     // 平面避障距离（2cm）
+  float PLANE_BONUS;         // 平面奖励权重
 
-  float RELAXED_NORM_TH;
-  float RELAXED_HOLE_DIST;
-  float RELAXED_CURV_TH;
+  // [新增] 凹凸山腰策略参数
+  float PROTRUSION_TH;       // 凸起高度差阈值（2cm）
+  float TIP_CROP_RATIO;      // 切顶比例基准值（动态调整）
+  float BASE_CROP_RATIO;     // 切底比例（固定10%）
+  float MOUNTAIN_NORM_TH;    // 山腰法向阈值（cos(25°)≈0.91）
+  float MOUNTAIN_HOLE_DIST;  // 山腰避障距离（4cm）
 
-  float HEIGHT_WEIGHT;
-  float CURV_WEIGHT;
-  float ANGLE_WEIGHT;
-  float CENTER_WEIGHT;
-
-  // [新增] 凸起策略参数
-  float PROTRUSION_TH;   // 判定为凸起的高度差阈值
-  float TIP_CROP_RATIO;  // 切顶比例（基准值，会根据高度差动态调整）
-  float BASE_CROP_RATIO; // 切底比例
-
-  // [新增] 山腰深坑防滑参数
-  float MOUNTAIN_HOLE_DIST;  // 山腰位置的深坑安全距离（3-4cm）
-  float MOUNTAIN_NORM_TH;    // 山腰位置的法向角度阈值（25度，cos(25°)≈0.91）
-  float HOLE_SAFE_DIST;      // 深坑安全距离阈值（5cm，用于动态调整法向角度）
-  bool ENABLE_HOLE_DIR_CHECK; // 是否启用深坑方向检查
-  float MAX_SLOPE_ANGLE;     // 最大允许坡度（30度，用于防止滑移）
-  float SLOPE_CHECK_RADIUS;  // 坡度检查半径（2cm）
+  // [新增] 凹坑避让参数
+  float HOLE_SAFE_DIST;      // 凹坑安全距离（5cm）
+  bool ENABLE_HOLE_DIR_CHECK; // 启用凹坑方向检查
   float DEPRESSION_DIST;     // 低洼区域检测距离（3cm）
+  float MAX_SLOPE_ANGLE;     // 最大允许坡度（30度）
+  float SLOPE_CHECK_RADIUS;  // 坡度检查半径（2cm）
+
+  // [新增] 防滑移参数
+  float MAX_NORMAL_Y;        // 最大法向Y分量（防止向右滑移）
+  float MAX_NORMAL_Z;        // 最大法向Z分量（防止向下滑移）
+
+  // [新增] 评分权重
+  float HEIGHT_WEIGHT;        // 高度权重（山腰优先）
+  float CURV_WEIGHT;          // 曲率权重（平整度优先）
+  float ANGLE_WEIGHT;         // 法向角度权重（垂直度优先）
+  float CENTER_WEIGHT;        // 中心权重（降低）
 
   // [新增] 随机模式参数
   float RANDOM_OFFSET_RANGE;  // 随机位置偏移范围
   float RANDOM_ANGLE_RANGE;   // 随机法向角度范围
-
-  // [新增] 平面判定参数
-  float FLAT_CURV_TH;  // 曲率阈值：< 0.03 认为平面，>= 0.03 认为凹凸
 } ChiselParam;
 
 class ChiselBox {
@@ -103,7 +104,9 @@ private:
   bool searchWithCriteria(pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud,
                           pcl::PointCloud<pcl::PointXYZ>::Ptr obstacles,
                           float norm_th, float hole_dist_th, float curv_th,
-                          pcl::PointXYZRGBNormal &result);
+                          pcl::PointXYZRGBNormal &result,
+                          bool is_large_plane = false,
+                          bool is_plane = false);
 };
 
 } // namespace chisel_box

@@ -550,6 +550,73 @@ colcon test-result --all
 
 ## 项目更新日志
 
+### 2026-01-15 - visual_base分支：平面优先策略、防滑移优化和点云保存功能
+
+#### 平面优先策略
+- ✅ 重新设计法向点选择策略，实现平面优先原则
+- ✅ 平面判定：面积 > 1平方cm 且 曲率 < 0.035
+- ✅ 平面策略：垂直凿击，法向X分量接近+1
+- ✅ 山腰策略：凹凸不平时的最佳凿击位置（切顶切底，山腰优先）
+- ✅ 移除三段式策略，改为平面优先策略
+
+#### 防滑移优化
+- ✅ 修正法向约束：从检查`abs(normal_x)`改为检查`normal_x`（X+方向是向墙里面凿击）
+- ✅ 添加防滑移约束：过滤法向Y分量 < -0.1（向右滑移）和法向Z分量 > 0.1（向下滑移）
+- ✅ 修正坡度检查：从基于法向Z分量改为基于法向X分量
+- ✅ 修正评分权重：从强调`normal_z`改为强调`normal_x`
+
+#### 坐标系理解
+- ✅ X轴：凿击方向，前进后退（X+方向是向墙里面凿击）
+- ✅ Y轴：平移（墙面的水平方向，左右）
+- ✅ Z轴：上下（重力方向）
+
+#### 凹坑避让
+- ✅ 增加深坑方向检查：防止法向指向深坑方向
+- ✅ 增加低洼区域检测：检测周围是否有比当前点低超过2cm的位置
+- ✅ 增加坡度检查：计算局部坡度，避免选择坡度太大的位置
+- ✅ 增加滑移方向检查：检查电锤可能滑移的方向
+
+#### 点云保存功能
+- ✅ 每次拍照获取的点云自动保存为PCD文件
+- ✅ 文件命名格式：1.pcd, 2.pcd, 3.pcd, ...
+- ✅ 保存位置：`/home/bosch/vChisel_ros2_ws/pcd_data/`
+- ✅ 自动创建pcd_data目录（如果不存在）
+- ✅ 记录保存日志（文件名和点数量）
+- ✅ 可通过`enable_pcd_save_`变量启用/禁用功能
+
+#### PLC通信优化
+- ✅ 优化点位计数逻辑：只统计有效点位，点位为0的值不统计也不发送给PLC
+- ✅ 移除0值填充逻辑：只发送有效点位给PLC
+- ✅ 添加无效点位检查：过滤x=y=z=0的无效点位
+
+#### 配置参数
+- ✅ 添加平面策略参数：PLANE_AREA_TH, PLANE_CURV_TH, PLANE_NORM_TH, PLANE_HOLE_DIST, PLANE_BONUS
+- ✅ 添加山腰策略参数：PROTRUSION_TH, TIP_CROP_RATIO, BASE_CROP_RATIO, MOUNTAIN_NORM_TH, MOUNTAIN_HOLE_DIST
+- ✅ 添加凹坑避让参数：HOLE_SAFE_DIST, ENABLE_HOLE_DIR_CHECK, DEPRESSION_DIST, MAX_SLOPE_ANGLE, SLOPE_CHECK_RADIUS
+- ✅ 添加防滑移参数：MAX_NORMAL_Y, MAX_NORMAL_Z
+- ✅ 所有参数都可以在yaml文件中动态调整
+
+#### 文件修改
+- ✅ `src/norm_calc/config/norm_calc_params.yaml` - 添加平面优先策略和防滑移参数
+- ✅ `src/norm_calc/include/norm_calc/chisel_box.h` - 添加平面优先策略参数结构
+- ✅ `src/norm_calc/src/chisel_box.cpp` - 实现平面优先策略和防滑移逻辑
+- ✅ `src/norm_calc/src/norm_calc_server.cpp` - 添加参数读取代码和点云保存功能
+- ✅ `src/snap_7/snap_7/plc_client_node.py` - 优化点位计数逻辑
+- ✅ `.gitignore` - 添加pcd_data目录到忽略列表
+
+#### 构建状态
+- ✅ 构建成功，无编译错误
+- ⚠️ 存在未使用变量警告（不影响功能）
+
+#### 问题解决
+- ✅ 解决山腰位置滑入凹区域的问题
+- ✅ 解决大于1平方cm的平面没有优先凿击的问题
+- ✅ 解决法向约束错误的问题（从abs改为检查正值）
+- ✅ 解决无效点位发送给PLC的问题
+- ✅ 实现点云自动保存功能，便于调试和数据记录
+
+---
+
 ### 2026-01-15 - visual_base分支：PLC通信优化和相机进程管理
 
 #### PLC通信优化

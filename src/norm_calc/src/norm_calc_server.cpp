@@ -11,7 +11,9 @@
 #include <cv_bridge/cv_bridge.h>
 #include <mutex>
 #include <pcl_conversions/pcl_conversions.h>
+#include <pcl/io/pcd_io.h>
 #include <thread>
+#include <filesystem>
 
 using std::placeholders::_1;
 using std::placeholders::_2;
@@ -80,6 +82,10 @@ private:
   sensor_msgs::msg::CameraInfo cam_info_;
   bool img_ready_ = false, depth_ready_ = false, info_ready_ = false;
 
+  // [新增] 点云保存计数器
+  int pcd_save_count_ = 0;
+  bool enable_pcd_save_ = true;  // 是否启用点云保存功能
+
   // 发布者句柄
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_debug_cloud_;
   rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr pub_captured_image_;
@@ -109,39 +115,40 @@ private:
     search_r_ = this->declare_parameter("SEARCH_RADIUS", 0.02);
     search_n_ = this->declare_parameter("SEARCH_NUM_TH", 30);
 
-    param_.STRICT_NORM_TH = this->declare_parameter("STRICT_NORM_TH", 0.96);
-    param_.STRICT_HOLE_DIST = this->declare_parameter("STRICT_HOLE_DIST", 0.05);
-    param_.STRICT_CURV_TH = this->declare_parameter("STRICT_CURV_TH", 0.04);
+    // [新增] 读取平面优先策略参数
+    param_.PLANE_AREA_TH = this->declare_parameter("PLANE_AREA_TH", 0.0001);
+    param_.PLANE_CURV_TH = this->declare_parameter("PLANE_CURV_TH", 0.035);
+    param_.PLANE_NORM_TH = this->declare_parameter("PLANE_NORM_TH", 0.95);
+    param_.PLANE_HOLE_DIST = this->declare_parameter("PLANE_HOLE_DIST", 0.02);
+    param_.PLANE_BONUS = this->declare_parameter("PLANE_BONUS", 5.0);
 
-    param_.RELAXED_NORM_TH = this->declare_parameter("RELAXED_NORM_TH", 0.86);
-    param_.RELAXED_HOLE_DIST =
-        this->declare_parameter("RELAXED_HOLE_DIST", 0.035);
-    param_.RELAXED_CURV_TH = this->declare_parameter("RELAXED_CURV_TH", 0.10);
-
-    param_.HEIGHT_WEIGHT = this->declare_parameter("HEIGHT_WEIGHT", 3.0);
-    param_.CURV_WEIGHT = this->declare_parameter("CURV_WEIGHT", 2.0);
-    param_.ANGLE_WEIGHT = this->declare_parameter("ANGLE_WEIGHT", 1.0);
-    param_.CENTER_WEIGHT = this->declare_parameter("CENTER_WEIGHT", 5.0);
-
+    // [新增] 读取凹凸山腰策略参数
     param_.PROTRUSION_TH = this->declare_parameter("PROTRUSION_TH", 0.02);
-    param_.TIP_CROP_RATIO = this->declare_parameter("TIP_CROP_RATIO", 0.25);
+    param_.TIP_CROP_RATIO = this->declare_parameter("TIP_CROP_RATIO", 0.05);
     param_.BASE_CROP_RATIO = this->declare_parameter("BASE_CROP_RATIO", 0.10);
+    param_.MOUNTAIN_NORM_TH = this->declare_parameter("MOUNTAIN_NORM_TH", 0.91);
+    param_.MOUNTAIN_HOLE_DIST = this->declare_parameter("MOUNTAIN_HOLE_DIST", 0.04);
+
+    // [新增] 读取凹坑避让参数
+    param_.HOLE_SAFE_DIST = this->declare_parameter("HOLE_SAFE_DIST", 0.05);
+    param_.ENABLE_HOLE_DIR_CHECK = this->declare_parameter("ENABLE_HOLE_DIR_CHECK", true);
+    param_.DEPRESSION_DIST = this->declare_parameter("DEPRESSION_DIST", 0.03);
+    param_.MAX_SLOPE_ANGLE = this->declare_parameter("MAX_SLOPE_ANGLE", 0.52);
+    param_.SLOPE_CHECK_RADIUS = this->declare_parameter("SLOPE_CHECK_RADIUS", 0.02);
+
+    // [新增] 读取防滑移参数
+    param_.MAX_NORMAL_Y = this->declare_parameter("MAX_NORMAL_Y", 0.1);
+    param_.MAX_NORMAL_Z = this->declare_parameter("MAX_NORMAL_Z", 0.1);
+
+    // [新增] 读取评分权重
+    param_.HEIGHT_WEIGHT = this->declare_parameter("HEIGHT_WEIGHT", 3.0);
+    param_.CURV_WEIGHT = this->declare_parameter("CURV_WEIGHT", 5.0);
+    param_.ANGLE_WEIGHT = this->declare_parameter("ANGLE_WEIGHT", 12.0);
+    param_.CENTER_WEIGHT = this->declare_parameter("CENTER_WEIGHT", 1.5);
 
     // [新增] 读取随机模式参数
     param_.RANDOM_OFFSET_RANGE = this->declare_parameter("RANDOM_OFFSET_RANGE", 0.02);
-    param_.RANDOM_ANGLE_RANGE = this->declare_parameter("RANDOM_ANGLE_RANGE", 0.35);
-
-    // [新增] 读取平面判定参数
-    param_.FLAT_CURV_TH = this->declare_parameter("FLAT_CURV_TH", 0.03);
-
-    // [新增] 读取山腰深坑防滑参数
-    param_.MOUNTAIN_HOLE_DIST = this->declare_parameter("MOUNTAIN_HOLE_DIST", 0.04);
-    param_.MOUNTAIN_NORM_TH = this->declare_parameter("MOUNTAIN_NORM_TH", 0.91);
-    param_.HOLE_SAFE_DIST = this->declare_parameter("HOLE_SAFE_DIST", 0.05);
-    param_.ENABLE_HOLE_DIR_CHECK = this->declare_parameter("ENABLE_HOLE_DIR_CHECK", true);
-    param_.MAX_SLOPE_ANGLE = this->declare_parameter("MAX_SLOPE_ANGLE", 0.52);
-    param_.SLOPE_CHECK_RADIUS = this->declare_parameter("SLOPE_CHECK_RADIUS", 0.02);
-    param_.DEPRESSION_DIST = this->declare_parameter("DEPRESSION_DIST", 0.03);
+    param_.RANDOM_ANGLE_RANGE = this->declare_parameter("RANDOM_ANGLE_RANGE", 0.14);
 
     // 读取手眼标定矩阵参数
     std::vector<double> row1 = this->declare_parameter(
@@ -447,6 +454,35 @@ private:
           this->get_logger(),
           "Generated raw cloud is empty. Check Z range or depth image.");
       return;
+    }
+
+    // [新增] 保存点云到pcd文件
+    if (enable_pcd_save_) {
+      pcd_save_count_++;
+      std::string pcd_dir = "/home/bosch/vChisel_ros2_ws/pcd_data";
+      
+      // 创建pcd_data目录（如果不存在）
+      if (!std::filesystem::exists(pcd_dir)) {
+        try {
+          std::filesystem::create_directories(pcd_dir);
+          RCLCPP_INFO(this->get_logger(), "Created pcd_data directory: %s", pcd_dir.c_str());
+        } catch (const std::exception &e) {
+          RCLCPP_ERROR(this->get_logger(), "Failed to create pcd_data directory: %s", e.what());
+          enable_pcd_save_ = false;
+        }
+      }
+      
+      // 保存点云文件
+      if (enable_pcd_save_) {
+        std::string pcd_filename = pcd_dir + "/" + std::to_string(pcd_save_count_) + ".pcd";
+        try {
+          pcl::io::savePCDFileBinary(pcd_filename, *raw_cloud);
+          RCLCPP_INFO(this->get_logger(), "Saved point cloud to: %s (%zu points)", 
+                      pcd_filename.c_str(), raw_cloud->size());
+        } catch (const std::exception &e) {
+          RCLCPP_ERROR(this->get_logger(), "Failed to save PCD file: %s", e.what());
+        }
+      }
     }
 
     // 5. 检测空洞

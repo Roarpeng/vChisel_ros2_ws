@@ -805,6 +805,7 @@ class PLCClientNode(Node):
         # Prepare data array for writing to PLC as REAL values (floats)
         # Write the calculated pose data to offsets 20-592 (偏移20开始到592)
         output_data = []
+        valid_point_count = 0  # 【新增】有效点位数量统计
         
         if len(resp.pose_list.poses) > 0:
             for i, pose in enumerate(resp.pose_list.poses):
@@ -815,6 +816,11 @@ class PLCClientNode(Node):
                     # 【新增】坐标过滤：如果 X < 0 或 Z > 0，则丢弃该点
                     if x < 0 or z > 0:
                         self.get_logger().warning(f'Filtered out point {i}: X={x:.4f}, Z={z:.4f} (X<0 or Z>0)')
+                        continue
+                    
+                    # 【新增】检查点位是否为0（无效点位）
+                    if x == 0.0 and y == 0.0 and z == 0.0:
+                        self.get_logger().warning(f'Filtered out point {i}: Position is zero (invalid point)')
                         continue
                     
                     # 将四元数转换为欧拉角（ZYX顺序，即ABC）
@@ -830,23 +836,24 @@ class PLCClientNode(Node):
                         clamped_euler_rad[0], clamped_euler_rad[1], clamped_euler_rad[2]  # A(Z), B(Y), C(X) 角度（弧度）
                     ]
                     output_data.extend(vals)
+                    valid_point_count += 1  # 【新增】增加有效点位计数
 
-        # Ensure output_data has the right size for 24 poses (24 * 6 = 144 values)
-        # Each pose has 6 values (x, y, z, rx, ry, rz), so 24 poses = 144 float values
-        expected_size = 24 * 6  # 144 values for 24 poses
-        if len(output_data) < expected_size:
-            output_data += [0.0] * (expected_size - len(output_data))
-        elif len(output_data) > expected_size:
-            output_data = output_data[:expected_size]
+        # 【修改】不再用0填充，只发送有效点位给PLC
+        # 最多支持24个点位，每个点位6个值（x, y, z, rx, ry, rz）
+        max_points = 24
+        if valid_point_count > max_points:
+            self.get_logger().warning(f'Too many valid points ({valid_point_count}), truncating to {max_points}')
+            valid_point_count = max_points
+            output_data = output_data[:max_points * 6]
         
-        # Write the pose data as REAL values to offset 20-592 (24 poses * 6 values * 4 bytes = 576 bytes = 144 floats)
-        self.get_logger().debug(f'Attempting to write {len(output_data)} REAL values to offset 20')
+        # Write the pose data as REAL values to offset 20
+        # 数据长度 = 有效点位数量 * 6个值/点位
+        self.get_logger().debug(f'Attempting to write {len(output_data)} REAL values ({valid_point_count} points) to offset 20')
         pose_write_success = self.write_real_array_to_db(output_data, start=20)
         
-        # Write pointNum to offset 18 (still as integer)
-        pointNum = len(output_data) // 6  # 计算过滤后的实际点位数量（每个点6个值）
-        self.get_logger().debug(f'Attempting to write point count {pointNum} to offset 18')
-        pointnum_write_success = self.write_registers_uint16([int(pointNum) & 0xFFFF], start=18)
+        # Write pointNum to offset 18 (only valid points, no padding)
+        self.get_logger().debug(f'Attempting to write point count {valid_point_count} to offset 18')
+        pointnum_write_success = self.write_registers_uint16([int(valid_point_count) & 0xFFFF], start=18)
         
         # Write rosStatus = 210 to offset 16 after all data is written (still as integer)
         self.get_logger().debug(f'Attempting to write status 210 to offset 16')

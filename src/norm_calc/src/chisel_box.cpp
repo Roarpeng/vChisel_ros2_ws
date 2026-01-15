@@ -23,79 +23,81 @@ bool ChiselBox::findBestPoint(
   if (cloud_roi->empty())
     return false;
 
+  // === 平面优先策略 ===
+  
+  // 【步骤1】计算凸包面积和平均曲率
+  float area = calculateConvexHullArea(cloud_roi);
+  
+  // 计算平均曲率
+  float avg_curv = 0.0f;
+  for (const auto &pt : cloud_roi->points) {
+    avg_curv += pt.curvature;
+  }
+  avg_curv /= cloud_roi->size();
+  
+  // 【步骤2】判断是否为平面
+  // 平面判定：面积 > 1平方cm 且 曲率 < 0.035
+  bool is_plane = (area > param_.PLANE_AREA_TH) && (avg_curv < param_.PLANE_CURV_TH);
+  
+  std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] Area: " << area * 10000.0f 
+            << " cm², Avg-curv: " << avg_curv << ", Is-plane: " 
+            << (is_plane ? "YES" : "NO") << std::endl;
+  
+  // 【步骤3】根据表面类型选择策略
   bool found = false;
-
-  // === 三段式策略：严格模式 → 宽松模式 → 随机模式 ===
-
-  if (state_ == STATE_PENDING) {
-    // 【第一次尝试】：严格模式
-    std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] Attempt 1: STRICT mode" << std::endl;
+  
+  if (is_plane) {
+    // 【平面策略】：垂直凿击
+    std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] Using PLANE strategy" << std::endl;
     found = searchWithCriteria(cloud_roi, obstacles,
-                               param_.STRICT_NORM_TH,
-                               param_.STRICT_HOLE_DIST,
-                               param_.STRICT_CURV_TH,
-                               out_point);
-    if (found) {
-      state_ = STATE_COMPLETED;
-      last_point_ = out_point;
-      has_last_point_ = true;
-      std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] STRICT mode succeeded" << std::endl;
-      return true;
-    } else {
-      state_ = STATE_SKIPPED_ONCE;
-      std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] STRICT mode failed, trying RELAXED mode" << std::endl;
-    }
-  }
-
-  if (state_ == STATE_SKIPPED_ONCE) {
-    // 【第二次尝试】：宽松模式
-    std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] Attempt 2: RELAXED mode" << std::endl;
+                               param_.PLANE_NORM_TH,      // 法向阈值（非常严格）
+                               param_.PLANE_HOLE_DIST,    // 避障距离
+                               param_.PLANE_CURV_TH,      // 曲率阈值
+                               out_point,
+                               true,  // is_large_plane = true
+                               true); // is_plane = true
+  } else {
+    // 【山腰策略】：凹凸不平时的最佳凿击位置
+    std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] Using MOUNTAIN strategy" << std::endl;
     found = searchWithCriteria(cloud_roi, obstacles,
-                               param_.RELAXED_NORM_TH,
-                               param_.RELAXED_HOLE_DIST,
-                               param_.RELAXED_CURV_TH,
-                               out_point);
-    if (found) {
-      state_ = STATE_COMPLETED;
-      last_point_ = out_point;
-      has_last_point_ = true;
-      std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] RELAXED mode succeeded" << std::endl;
-      return true;
-    } else {
-      state_ = STATE_SKIPPED_TWICE;
-      std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] RELAXED mode failed, trying RANDOM mode" << std::endl;
-    }
+                               param_.MOUNTAIN_NORM_TH,   // 法向阈值（适中）
+                               param_.MOUNTAIN_HOLE_DIST, // 避障距离（更大）
+                               0.15,                     // 曲率阈值（宽松）
+                               out_point,
+                               false, // is_large_plane = false
+                               false); // is_plane = false
   }
-
-  if (state_ == STATE_SKIPPED_TWICE) {
-    // 【第三次尝试】：随机模式
-    std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] Attempt 3: RANDOM mode" << std::endl;
+  
+  // 【步骤4】如果平面/山腰策略失败，尝试随机模式
+  if (!found) {
+    std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] Primary strategy failed, trying RANDOM mode" << std::endl;
     found = searchWithRandomMode(cloud_roi, obstacles, out_point);
-    if (found) {
-      state_ = STATE_COMPLETED;
-      last_point_ = out_point;
-      has_last_point_ = true;
-      std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] RANDOM mode succeeded" << std::endl;
-      return true;
-    } else {
-      // 随机模式也失败，使用最接近网格中心的点作为备用方案
-      std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] RANDOM mode failed, using fallback" << std::endl;
-      found = searchWithCriteria(cloud_roi, obstacles,
-                                 0.5,  // 非常宽松的法向阈值
-                                 0.01, // 非常宽松的避障距离
-                                 1.0,  // 非常宽松的曲率阈值
-                                 out_point);
-      if (found) {
-        state_ = STATE_COMPLETED;
-        last_point_ = out_point;
-        has_last_point_ = true;
-        std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] Fallback succeeded" << std::endl;
-        return true;
-      }
-    }
   }
-
-  // 三次尝试都失败
+  
+  // 【步骤5】如果随机模式也失败，使用备用方案
+  if (!found) {
+    std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] RANDOM mode failed, using fallback" << std::endl;
+    found = searchWithCriteria(cloud_roi, obstacles,
+                               0.5,  // 非常宽松的法向阈值
+                               0.01, // 非常宽松的避障距离
+                               1.0,  // 非常宽松的曲率阈值
+                               out_point,
+                               false, // is_large_plane = false
+                               false); // is_plane = false
+  }
+  
+  // 【步骤6】更新状态
+  if (found) {
+    state_ = STATE_COMPLETED;
+    last_point_ = out_point;
+    has_last_point_ = true;
+    std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] Found point successfully!" << std::endl;
+    return true;
+  } else {
+    state_ = STATE_UNREACHABLE;
+    std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] All strategies failed, marking as UNREACHABLE" << std::endl;
+    return false;
+  }
   state_ = STATE_UNREACHABLE;
   std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] All attempts failed, marking as UNREACHABLE" << std::endl;
   return false;
@@ -104,7 +106,8 @@ bool ChiselBox::findBestPoint(
 bool ChiselBox::searchWithCriteria(
     pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud,
     pcl::PointCloud<pcl::PointXYZ>::Ptr obstacles, float norm_th,
-    float hole_dist_th, float curv_th, pcl::PointXYZRGBNormal &result) {
+    float hole_dist_th, float curv_th, pcl::PointXYZRGBNormal &result,
+    bool is_large_plane, bool is_plane) {
   if (cloud->empty())
     return false;
 
@@ -129,12 +132,12 @@ bool ChiselBox::searchWithCriteria(
   float avg_z = z_sum / cloud->size();
   float avg_curv = curv_sum / cloud->size();
 
-  // 【自适应平整度检测】
-  // 平面判定：曲率 < 0.03 认为平面
-  // 凹凸判定：曲率 ≥ 0.03 认为凹凸
-  bool is_flat_surface = (avg_curv < param_.FLAT_CURV_TH);
+  // 【判断表面类型】
+  // 如果is_plane为true，强制认为是平面
+  // 如果is_plane为false，根据曲率判断是否为平面
+  bool is_flat_surface = is_plane || (avg_curv < param_.PLANE_CURV_TH);
   
-  // 凸起检测：高度差 ≥ 2cm 且 曲率 ≥ 0.03
+  // 凸起检测：高度差 ≥ 2cm 且 不是平面
   bool is_protrusion = (z_range >= param_.PROTRUSION_TH) && (!is_flat_surface);
 
   std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] Z-range: " << z_range * 1000.0f << "mm, Avg-curv: " << avg_curv
@@ -145,8 +148,12 @@ bool ChiselBox::searchWithCriteria(
   float valid_z_min = z_min;
   float valid_z_max = z_max;
 
-  if (is_protrusion) {
-    // 【动态切顶切底策略】
+  if (is_plane) {
+    // 【平面策略】：不限制高度区间，优先随机分布
+    valid_z_max = z_max;
+    valid_z_min = z_min;
+  } else if (is_protrusion) {
+    // 【山腰策略】：动态切顶切底
     // 根据高度差动态调整切顶比例：
     // - 高度差 < 2cm：切顶0%（不切顶）
     // - 高度差 2-3cm：切顶5%
@@ -201,14 +208,22 @@ bool ChiselBox::searchWithCriteria(
       continue;
     }
 
-    // 法向约束（X轴是凿击方向）
-    // 要求法向X分量大（沿着凿击方向，垂直于墙面）
-    if (std::abs(pt.normal_x) < norm_th) {
+    // 法向约束（X+方向是向墙里面凿击）
+    // 要求法向X分量接近+1（沿着X+方向，向墙里面凿击）
+    if (pt.normal_x < norm_th) {
       filtered_by_norm++;
       continue;
     }
 
-    // 【防滑移约束】（Z轴是上下，重力方向）
+    // 【防滑移约束】（Y轴是平移方向，Z轴是上下）
+    // 防止法向有向右的分量（normal_y < 0），避免电锤向右滑移到凹区域
+    if (is_protrusion && pt.normal_y < -0.1f) {  // 法向向右分量 < -0.1（约6度）
+      std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] Point filtered by rightward normal: " 
+                << pt.normal_y << std::endl;
+      filtered_by_norm++;
+      continue;
+    }
+
     // 防止法向有向下的分量（normal_z > 0），避免电锤向下滑移
     if (is_protrusion && pt.normal_z > 0.1f) {  // 法向向下分量 > 0.1（约6度）
       std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] Point filtered by downward normal: " 
@@ -399,8 +414,23 @@ bool ChiselBox::searchWithCriteria(
 
     float score = 0.0f;
 
-    if (is_protrusion) {
-      // 【凸起策略评分】
+    if (is_plane) {
+      // 【平面策略评分】：垂直凿击
+      // 1. 平面位置奖励
+      score += param_.PLANE_BONUS;  // 平面位置额外奖励
+      
+      // 2. 强调法向X分量（沿着凿击方向，垂直于墙面）
+      score += param_.ANGLE_WEIGHT * pt.normal_x;
+      
+      // 3. 平整度奖励（曲率越小越好）
+      score -= param_.CURV_WEIGHT * pt.curvature;
+      
+      // 4. 随机分布（不强调中心位置）
+      score -= param_.CENTER_WEIGHT * dist_center * 0.1f;
+      
+    } else {
+      // 【山腰策略评分】：凹凸不平时的最佳凿击位置
+      
       // 1. 在有效区间内，优先选法向变化小（平整）的地方，防止打在棱上
       score -= param_.CURV_WEIGHT * pt.curvature * 2.0f; // 加倍惩罚曲率
 
@@ -428,9 +458,6 @@ bool ChiselBox::searchWithCriteria(
 
       // 4. 【动态法向角度限制】：根据距离深坑的距离动态调整法向角度权重
       // X轴是凿击方向，要求法向X分量大（沿着凿击方向）
-      // 距离深坑 > 5cm：法向角度放宽到25°（cos(25°)≈0.91）
-      // 距离深坑 3-5cm：法向角度适中20°（cos(20°)≈0.94）
-      // 距离深坑 < 3cm：法向角度严格16°（cos(16°)≈0.96）
       float norm_weight = param_.ANGLE_WEIGHT;
       if (min_hole_dist < std::numeric_limits<float>::max()) {
         float hole_dist = std::sqrt(min_hole_dist);
@@ -452,32 +479,20 @@ bool ChiselBox::searchWithCriteria(
         score -= slide_penalty;
       }
       
-      // 5. 【坡度评分】：优先选择坡度小的位置
+      // 6. 【坡度评分】：优先选择坡度小的位置
       if (slope_angle > 0.0f) {
         // 坡度越小，奖励越大
         float slope_penalty = (slope_angle / param_.MAX_SLOPE_ANGLE) * param_.CURV_WEIGHT * 3.0f;
         score -= slope_penalty;
       }
       
-      // 6. 【低洼区域距离评分】：优先选择远离低洼区域的点
+      // 7. 【低洼区域距离评分】：优先选择远离低洼区域的点
       if (min_depression_dist < std::numeric_limits<float>::max()) {
         // 距离越近，惩罚越大
         if (min_depression_dist < param_.DEPRESSION_DIST) {
           float depression_penalty = (param_.DEPRESSION_DIST - min_depression_dist) * param_.CENTER_WEIGHT * 15.0f;
           score -= depression_penalty;
         }
-      }
-    } else {
-      // 【平面策略评分】 (原有逻辑)
-      // 优先打稍微凸起一点的地方（好破碎）
-      score += param_.HEIGHT_WEIGHT * pt.z;
-      score -= param_.CURV_WEIGHT * pt.curvature;
-      score += param_.ANGLE_WEIGHT * std::abs(pt.normal_x);  // 强调法向X分量（凿击方向）
-      
-      // 【防滑移评分】：惩罚法向向下分量（Z轴是上下，重力方向）
-      if (pt.normal_z > 0.0f) {
-        float slide_penalty = pt.normal_z * param_.CENTER_WEIGHT * 10.0f;
-        score -= slide_penalty;
       }
     }
 
@@ -550,7 +565,7 @@ bool ChiselBox::searchWithRandomMode(pcl::PointCloud<pcl::PointXYZRGBNormal>::Pt
       for (const auto &obs : obstacles->points) {
         float dx = pt.x - obs.x;
         float dy = pt.y - obs.y;
-        if (dx * dx + dy * dy < param_.RELAXED_HOLE_DIST * param_.RELAXED_HOLE_DIST) {
+        if (dx * dx + dy * dy < param_.PLANE_HOLE_DIST * param_.PLANE_HOLE_DIST) {
           clash = true;
           break;
         }
