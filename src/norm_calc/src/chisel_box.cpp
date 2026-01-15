@@ -495,22 +495,41 @@ bool ChiselBox::searchWithCriteria(
     // 1. [关键] 平面区域优先（权重最高）：优先选择属于面积>1cm²的平面区域的点
     bool is_flat_point = (pt.curvature < 0.3f);  // 曲率阈值0.3
     if (is_flat_point && has_flat_region) {  // 属于平面区域且平面区域面积>1cm²
-      score += 500.0f;  // 平面区域点给予巨大奖励（比FLAT_POINT_BONUS更大）
+      score += 2000.0f;  // 平面区域点给予巨大奖励（从500.0增加到2000.0）
       std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] Point in flat region (curvature: " 
-                << pt.curvature << "), bonus: +500.0" << std::endl;
+                << pt.curvature << "), bonus: +2000.0" << std::endl;
     } else if (is_flat_point) {  // 曲率小但平面区域面积不足
       score += param_.FLAT_POINT_BONUS;  // 平面点给予奖励
     }
 
     // 2. 优先整体平面下压（高度残差越大，分数越高）
-    score += 10.0f * height_residual * 1000.0f;  // 从1.0改为10.0，提高权重
+    score += 5.0f * height_residual * 1000.0f;  // 从10.0降低到5.0，减少高度残差权重
 
     // 3. 抑制偏离平面的山腰点（点到局部平面的距离）
     if (has_valid_plane) {
       score -= 5.0f * dist_to_plane * 1000.0f;  // 从0.5改为5.0，提高权重
     }
 
-    // 4. 抑制尖锐边缘（曲率）
+    // [新增] 抑制凹坑边缘：如果点接近凹坑，给予巨大惩罚
+    // [新增] 凹坑内检测：如果点在凹坑内，给予最大惩罚
+    bool is_inside_hole = false;
+    if (min_hole_dist < std::numeric_limits<float>::max()) {
+      float hole_dist = std::sqrt(min_hole_dist);
+      if (hole_dist < 0.01f) {  // 距离凹坑 < 1cm（在凹坑内）
+        score -= 5000.0f;  // 凹坑内给予最大惩罚
+        is_inside_hole = true;
+        std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] Point INSIDE hole (dist: " 
+                  << hole_dist * 1000.0f << "mm), penalty: -5000.0" << std::endl;
+      } else if (hole_dist < 0.02f) {  // 距离凹坑 1-2cm（凹坑边缘）
+        score -= 3000.0f;  // 凹坑边缘给予巨大惩罚
+        std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] Point at hole edge (dist: " 
+                  << hole_dist * 1000.0f << "mm), penalty: -3000.0" << std::endl;
+      } else if (hole_dist < 0.03f) {  // 距离凹坑 2-3cm（凹坑附近）
+        score -= 1000.0f;  // 凹坑附近给予大惩罚
+      }
+    }
+
+    // 5. 抑制尖锐边缘（曲率）
     score -= 3.0f * pt.curvature * 100.0f;  // 从0.3改为3.0，提高权重
 
     // 5. 法向垂直度（保留原有逻辑，但降低权重）
