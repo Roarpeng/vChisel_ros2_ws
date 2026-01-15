@@ -164,6 +164,31 @@ bool ChiselBox::searchWithCriteria(
             << ", Is-protrusion: " << (is_protrusion ? "YES" : "NO") << std::endl;
 
   // ==========================================
+  // [新增] 每个cell内的平面区域识别
+  // ==========================================
+  // 识别曲率 < 0.3 的点作为平面区域
+  pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr flat_region(
+      new pcl::PointCloud<pcl::PointXYZRGBNormal>);
+  for (const auto &pt : cloud->points) {
+    if (pt.curvature < 0.3f) {  // 曲率阈值
+      flat_region->push_back(pt);
+    }
+  }
+
+  // 计算平面区域的凸包面积
+  float flat_region_area = 0.0f;
+  bool has_flat_region = false;
+  if (!flat_region->empty()) {
+    flat_region_area = calculateConvexHullArea(flat_region);
+    // 如果面积 > 1平方cm，认为存在平面区域
+    has_flat_region = (flat_region_area > 0.0001f);  // 1cm² = 0.0001m²
+
+    std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] Flat region: " 
+              << flat_region->size() << " points, Area: " << flat_region_area * 10000.0f 
+              << " cm², Has-flat-region: " << (has_flat_region ? "YES" : "NO") << std::endl;
+  }
+
+  // ==========================================
   // 第二步：拟合局部参考平面（使用RANSAC）
   // ==========================================
   LocalPlane local_plane;
@@ -459,14 +484,22 @@ bool ChiselBox::searchWithCriteria(
       if (isNormalSimilar(pt, last_point_)) {
         score -= 2000.0f;  // 法向趋同给予巨大惩罚
       }
+      // [新增] 位置距离约束：防止重复凿击同一位置
+      if (isPositionTooClose(pt, last_point_)) {
+        score -= 3000.0f;  // 位置太近给予更大惩罚
+      }
     }
 
     // [新增] 新的评分函数（平面优先 + 均匀下降导向）
 
-    // 1. 平面优先（权重最高）：识别平面点并给予巨大奖励
-    bool is_flat_point = (pt.curvature < param_.CURVATURE_THRESHOLD);
-    if (is_flat_point) {
-      score += param_.FLAT_POINT_BONUS;  // 平面点给予巨大奖励
+    // 1. [关键] 平面区域优先（权重最高）：优先选择属于面积>1cm²的平面区域的点
+    bool is_flat_point = (pt.curvature < 0.3f);  // 曲率阈值0.3
+    if (is_flat_point && has_flat_region) {  // 属于平面区域且平面区域面积>1cm²
+      score += 500.0f;  // 平面区域点给予巨大奖励（比FLAT_POINT_BONUS更大）
+      std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] Point in flat region (curvature: " 
+                << pt.curvature << "), bonus: +500.0" << std::endl;
+    } else if (is_flat_point) {  // 曲率小但平面区域面积不足
+      score += param_.FLAT_POINT_BONUS;  // 平面点给予奖励
     }
 
     // 2. 优先整体平面下压（高度残差越大，分数越高）
@@ -884,6 +917,27 @@ bool ChiselBox::isNormalSimilar(const pcl::PointXYZRGBNormal& current_point,
   }
 
   return is_similar;
+}
+
+// [新增] 检查位置距离是否太近（防止重复凿击）
+bool ChiselBox::isPositionTooClose(const pcl::PointXYZRGBNormal& current_point,
+                                  const pcl::PointXYZRGBNormal& last_point) {
+  // 计算两点之间的欧氏距离
+  float dx = current_point.x - last_point.x;
+  float dy = current_point.y - last_point.y;
+  float dz = current_point.z - last_point.z;
+  float distance = std::sqrt(dx * dx + dy * dy + dz * dz);
+
+  // 如果距离小于阈值，认为位置太近
+  bool is_too_close = (distance < param_.POSITION_DISTANCE_THRESHOLD);
+
+  if (is_too_close) {
+    std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] Position is too close (distance: "
+              << distance * 1000.0f << "mm < threshold: "
+              << param_.POSITION_DISTANCE_THRESHOLD * 1000.0f << "mm)" << std::endl;
+  }
+
+  return is_too_close;
 }
 
 } // namespace chisel_box

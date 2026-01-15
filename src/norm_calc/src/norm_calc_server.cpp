@@ -166,6 +166,7 @@ private:
 
     // [新增] 读取法向趋同约束参数（防止重复凿击）
     param_.NORMAL_SIMILARITY_THRESHOLD = this->declare_parameter("NORMAL_SIMILARITY_THRESHOLD", 0.17);
+    param_.POSITION_DISTANCE_THRESHOLD = this->declare_parameter("POSITION_DISTANCE_THRESHOLD", 0.03);
 
     // 读取手眼标定矩阵参数
     std::vector<double> row1 = this->declare_parameter(
@@ -199,6 +200,146 @@ private:
     RCLCPP_INFO(this->get_logger(), "[%.6f, %.6f, %.6f, %.6f]",
       T_cam_tool_(3,0), T_cam_tool_(3,1), T_cam_tool_(3,2), T_cam_tool_(3,3));
     RCLCPP_INFO(this->get_logger(), "===========================");
+
+    // [新增] 注册参数回调，实现YAML文件动态生效
+    auto param_callback_handle = this->add_on_set_parameters_callback(
+      [this](const std::vector<rclcpp::Parameter> & parameters) {
+        rcl_interfaces::msg::SetParametersResult result;
+        result.successful = true;
+
+        for (const auto & param : parameters) {
+          // 混合策略参数
+          if (param.get_name() == "FLAT_POINT_BONUS") {
+            param_.FLAT_POINT_BONUS = param.as_double();
+            RCLCPP_INFO(this->get_logger(), "Parameter updated: FLAT_POINT_BONUS = %f", param_.FLAT_POINT_BONUS);
+          } else if (param.get_name() == "CURVATURE_THRESHOLD") {
+            param_.CURVATURE_THRESHOLD = param.as_double();
+            RCLCPP_INFO(this->get_logger(), "Parameter updated: CURVATURE_THRESHOLD = %f", param_.CURVATURE_THRESHOLD);
+          } else if (param.get_name() == "CELL_STD_THRESHOLD") {
+            param_.CELL_STD_THRESHOLD = param.as_double();
+            RCLCPP_INFO(this->get_logger(), "Parameter updated: CELL_STD_THRESHOLD = %f", param_.CELL_STD_THRESHOLD);
+          }
+          // 法向趋同约束参数
+          else if (param.get_name() == "NORMAL_SIMILARITY_THRESHOLD") {
+            param_.NORMAL_SIMILARITY_THRESHOLD = param.as_double();
+            RCLCPP_INFO(this->get_logger(), "Parameter updated: NORMAL_SIMILARITY_THRESHOLD = %f", param_.NORMAL_SIMILARITY_THRESHOLD);
+          } else if (param.get_name() == "POSITION_DISTANCE_THRESHOLD") {
+            param_.POSITION_DISTANCE_THRESHOLD = param.as_double();
+            RCLCPP_INFO(this->get_logger(), "Parameter updated: POSITION_DISTANCE_THRESHOLD = %f", param_.POSITION_DISTANCE_THRESHOLD);
+          }
+          // 目标高度和Cell停止参数
+          else if (param.get_name() == "DELTA_Z") {
+            param_.DELTA_Z = param.as_double();
+            RCLCPP_INFO(this->get_logger(), "Parameter updated: DELTA_Z = %f", param_.DELTA_Z);
+          } else if (param.get_name() == "CELL_FLAT_THRESHOLD") {
+            param_.CELL_FLAT_THRESHOLD = param.as_double();
+            RCLCPP_INFO(this->get_logger(), "Parameter updated: CELL_FLAT_THRESHOLD = %f", param_.CELL_FLAT_THRESHOLD);
+          }
+          // 局部平面拟合和高度残差参数
+          else if (param.get_name() == "RESIDUAL_WEIGHT") {
+            param_.RESIDUAL_WEIGHT = param.as_double();
+            RCLCPP_INFO(this->get_logger(), "Parameter updated: RESIDUAL_WEIGHT = %f", param_.RESIDUAL_WEIGHT);
+          } else if (param.get_name() == "RANSAC_THRESHOLD") {
+            param_.RANSAC_THRESHOLD = param.as_double();
+            RCLCPP_INFO(this->get_logger(), "Parameter updated: RANSAC_THRESHOLD = %f", param_.RANSAC_THRESHOLD);
+          } else if (param.get_name() == "MIN_PLANE_POINTS") {
+            param_.MIN_PLANE_POINTS = param.as_int();
+            RCLCPP_INFO(this->get_logger(), "Parameter updated: MIN_PLANE_POINTS = %d", param_.MIN_PLANE_POINTS);
+          }
+          // 评分权重参数
+          else if (param.get_name() == "HEIGHT_WEIGHT") {
+            param_.HEIGHT_WEIGHT = param.as_double();
+            RCLCPP_INFO(this->get_logger(), "Parameter updated: HEIGHT_WEIGHT = %f", param_.HEIGHT_WEIGHT);
+          } else if (param.get_name() == "CURV_WEIGHT") {
+            param_.CURV_WEIGHT = param.as_double();
+            RCLCPP_INFO(this->get_logger(), "Parameter updated: CURV_WEIGHT = %f", param_.CURV_WEIGHT);
+          } else if (param.get_name() == "ANGLE_WEIGHT") {
+            param_.ANGLE_WEIGHT = param.as_double();
+            RCLCPP_INFO(this->get_logger(), "Parameter updated: ANGLE_WEIGHT = %f", param_.ANGLE_WEIGHT);
+          } else if (param.get_name() == "CENTER_WEIGHT") {
+            param_.CENTER_WEIGHT = param.as_double();
+            RCLCPP_INFO(this->get_logger(), "Parameter updated: CENTER_WEIGHT = %f", param_.CENTER_WEIGHT);
+          }
+          // 平面优先策略参数
+          else if (param.get_name() == "PLANE_AREA_TH") {
+            param_.PLANE_AREA_TH = param.as_double();
+            RCLCPP_INFO(this->get_logger(), "Parameter updated: PLANE_AREA_TH = %f", param_.PLANE_AREA_TH);
+          } else if (param.get_name() == "PLANE_CURV_TH") {
+            param_.PLANE_CURV_TH = param.as_double();
+            RCLCPP_INFO(this->get_logger(), "Parameter updated: PLANE_CURV_TH = %f", param_.PLANE_CURV_TH);
+          } else if (param.get_name() == "PLANE_NORM_TH") {
+            param_.PLANE_NORM_TH = param.as_double();
+            RCLCPP_INFO(this->get_logger(), "Parameter updated: PLANE_NORM_TH = %f", param_.PLANE_NORM_TH);
+          } else if (param.get_name() == "PLANE_HOLE_DIST") {
+            param_.PLANE_HOLE_DIST = param.as_double();
+            RCLCPP_INFO(this->get_logger(), "Parameter updated: PLANE_HOLE_DIST = %f", param_.PLANE_HOLE_DIST);
+          } else if (param.get_name() == "PLANE_BONUS") {
+            param_.PLANE_BONUS = param.as_double();
+            RCLCPP_INFO(this->get_logger(), "Parameter updated: PLANE_BONUS = %f", param_.PLANE_BONUS);
+          }
+          // 凹凸山腰策略参数
+          else if (param.get_name() == "PROTRUSION_TH") {
+            param_.PROTRUSION_TH = param.as_double();
+            RCLCPP_INFO(this->get_logger(), "Parameter updated: PROTRUSION_TH = %f", param_.PROTRUSION_TH);
+          } else if (param.get_name() == "TIP_CROP_RATIO") {
+            param_.TIP_CROP_RATIO = param.as_double();
+            RCLCPP_INFO(this->get_logger(), "Parameter updated: TIP_CROP_RATIO = %f", param_.TIP_CROP_RATIO);
+          } else if (param.get_name() == "BASE_CROP_RATIO") {
+            param_.BASE_CROP_RATIO = param.as_double();
+            RCLCPP_INFO(this->get_logger(), "Parameter updated: BASE_CROP_RATIO = %f", param_.BASE_CROP_RATIO);
+          } else if (param.get_name() == "MOUNTAIN_NORM_TH") {
+            param_.MOUNTAIN_NORM_TH = param.as_double();
+            RCLCPP_INFO(this->get_logger(), "Parameter updated: MOUNTAIN_NORM_TH = %f", param_.MOUNTAIN_NORM_TH);
+          } else if (param.get_name() == "MOUNTAIN_HOLE_DIST") {
+            param_.MOUNTAIN_HOLE_DIST = param.as_double();
+            RCLCPP_INFO(this->get_logger(), "Parameter updated: MOUNTAIN_HOLE_DIST = %f", param_.MOUNTAIN_HOLE_DIST);
+          }
+          // 凹坑避让参数
+          else if (param.get_name() == "HOLE_SAFE_DIST") {
+            param_.HOLE_SAFE_DIST = param.as_double();
+            RCLCPP_INFO(this->get_logger(), "Parameter updated: HOLE_SAFE_DIST = %f", param_.HOLE_SAFE_DIST);
+          } else if (param.get_name() == "ENABLE_HOLE_DIR_CHECK") {
+            param_.ENABLE_HOLE_DIR_CHECK = param.as_bool();
+            RCLCPP_INFO(this->get_logger(), "Parameter updated: ENABLE_HOLE_DIR_CHECK = %s", param_.ENABLE_HOLE_DIR_CHECK ? "true" : "false");
+          } else if (param.get_name() == "DEPRESSION_DIST") {
+            param_.DEPRESSION_DIST = param.as_double();
+            RCLCPP_INFO(this->get_logger(), "Parameter updated: DEPRESSION_DIST = %f", param_.DEPRESSION_DIST);
+          } else if (param.get_name() == "MAX_SLOPE_ANGLE") {
+            param_.MAX_SLOPE_ANGLE = param.as_double();
+            RCLCPP_INFO(this->get_logger(), "Parameter updated: MAX_SLOPE_ANGLE = %f", param_.MAX_SLOPE_ANGLE);
+          } else if (param.get_name() == "SLOPE_CHECK_RADIUS") {
+            param_.SLOPE_CHECK_RADIUS = param.as_double();
+            RCLCPP_INFO(this->get_logger(), "Parameter updated: SLOPE_CHECK_RADIUS = %f", param_.SLOPE_CHECK_RADIUS);
+          }
+          // 防滑移参数
+          else if (param.get_name() == "MAX_NORMAL_Y") {
+            param_.MAX_NORMAL_Y = param.as_double();
+            RCLCPP_INFO(this->get_logger(), "Parameter updated: MAX_NORMAL_Y = %f", param_.MAX_NORMAL_Y);
+          } else if (param.get_name() == "MAX_NORMAL_Z") {
+            param_.MAX_NORMAL_Z = param.as_double();
+            RCLCPP_INFO(this->get_logger(), "Parameter updated: MAX_NORMAL_Z = %f", param_.MAX_NORMAL_Z);
+          }
+          // 随机模式参数
+          else if (param.get_name() == "RANDOM_OFFSET_RANGE") {
+            param_.RANDOM_OFFSET_RANGE = param.as_double();
+            RCLCPP_INFO(this->get_logger(), "Parameter updated: RANDOM_OFFSET_RANGE = %f", param_.RANDOM_OFFSET_RANGE);
+          } else if (param.get_name() == "RANDOM_ANGLE_RANGE") {
+            param_.RANDOM_ANGLE_RANGE = param.as_double();
+            RCLCPP_INFO(this->get_logger(), "Parameter updated: RANDOM_ANGLE_RANGE = %f", param_.RANDOM_ANGLE_RANGE);
+          }
+          // 其他参数（不存储在ChiselParam中，只在norm_calc_server中使用）
+          else {
+            RCLCPP_WARN(this->get_logger(), "Parameter '%s' cannot be updated dynamically", param.get_name().c_str());
+            result.successful = false;
+            result.reason = "Parameter not supported for dynamic update";
+          }
+        }
+
+        return result;
+      }
+    );
+
+    RCLCPP_INFO(this->get_logger(), "=== Parameter callback registered for dynamic updates ===");
   }
 
   void initGrids() {

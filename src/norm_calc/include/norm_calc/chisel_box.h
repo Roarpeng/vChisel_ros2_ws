@@ -77,6 +77,9 @@ typedef struct {
 
   // [新增] 法向趋同约束参数（防止重复凿击）
   float NORMAL_SIMILARITY_THRESHOLD;  // 法向趋同阈值（弧度，法向角度差小于此值时认为趋同）
+
+  // [新增] 位置距离避让参数（防止重复凿击）
+  float POSITION_DISTANCE_THRESHOLD;  // 位置距离阈值（米，与上次点位的距离小于此值时认为太近）
 } ChiselParam;
 
 // [新增] 局部参考平面结构体
@@ -148,6 +151,10 @@ private:
   // [新增] 检查法向是否趋同（防止重复凿击）
   bool isNormalSimilar(const pcl::PointXYZRGBNormal& current_point,
                       const pcl::PointXYZRGBNormal& last_point);
+
+  // [新增] 检查位置距离是否太近（防止重复凿击）
+  bool isPositionTooClose(const pcl::PointXYZRGBNormal& current_point,
+                         const pcl::PointXYZRGBNormal& last_point);
 
   // 内部通用搜索逻辑
   bool searchWithCriteria(pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud,

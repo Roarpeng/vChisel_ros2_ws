@@ -25,10 +25,10 @@ public:
         "visual_norm_result", 10,
         std::bind(&ImageNormViewerNode::poseCallback, this, _1));
 
-    // Subscription to camera info for projection (using depth info as
-    // calculation reference)
+    // Subscription to camera info for projection (using aligned depth info as
+    // calculation reference - aligned to color camera)
     cam_info_sub_ = this->create_subscription<sensor_msgs::msg::CameraInfo>(
-        "camera/camera/depth/camera_info", 10,
+        "camera/camera/aligned_depth_to_color/camera_info", 10,
         std::bind(&ImageNormViewerNode::cameraInfoCallback, this, _1));
 
     window_name_ = "Norm Calculation Result";
