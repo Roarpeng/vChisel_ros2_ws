@@ -201,8 +201,18 @@ bool ChiselBox::searchWithCriteria(
       continue;
     }
 
-    // 法向约束
-    if (std::abs(pt.normal_z) < norm_th) {
+    // 法向约束（X轴是凿击方向）
+    // 要求法向X分量大（沿着凿击方向，垂直于墙面）
+    if (std::abs(pt.normal_x) < norm_th) {
+      filtered_by_norm++;
+      continue;
+    }
+
+    // 【防滑移约束】（Z轴是上下，重力方向）
+    // 防止法向有向下的分量（normal_z > 0），避免电锤向下滑移
+    if (is_protrusion && pt.normal_z > 0.1f) {  // 法向向下分量 > 0.1（约6度）
+      std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] Point filtered by downward normal: " 
+                << pt.normal_z << std::endl;
       filtered_by_norm++;
       continue;
     }
@@ -278,6 +288,111 @@ bool ChiselBox::searchWithCriteria(
       continue;
     }
 
+    // --- 2.5 坡度和低洼区域检查（仅山腰位置） ---
+    float slope_angle = 0.0f;
+    float min_depression_dist = std::numeric_limits<float>::max();
+    bool is_unstable = false;
+    
+    if (is_protrusion) {
+      // 【坡度检查】
+      // 计算局部坡度：检查周围点的法向量变化
+      // X轴是凿击方向，坡度应该是法向偏离X轴的程度
+      int neighbor_count = 0;
+      float normal_x_sum = 0.0f;
+      
+      for (const auto &neighbor : cloud->points) {
+        float dx = pt.x - neighbor.x;
+        float dy = pt.y - neighbor.y;
+        float dist_sq = dx * dx + dy * dy;
+        
+        if (dist_sq < param_.SLOPE_CHECK_RADIUS * param_.SLOPE_CHECK_RADIUS && dist_sq > 0.0001f) {
+          normal_x_sum += std::abs(neighbor.normal_x);
+          neighbor_count++;
+        }
+      }
+      
+      if (neighbor_count > 0) {
+        float avg_normal_x = normal_x_sum / neighbor_count;
+        // 坡度角度 = acos(平均法向X分量)
+        // 坡度越大，法向X分量越小
+        slope_angle = std::acos(std::min(1.0f, std::max(-1.0f, avg_normal_x)));
+        
+        // 如果坡度超过阈值，过滤该点
+        if (slope_angle > param_.MAX_SLOPE_ANGLE) {
+          std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] Point filtered by slope: " 
+                    << slope_angle * 180.0f / M_PI << "° (max: " 
+                    << param_.MAX_SLOPE_ANGLE * 180.0f / M_PI << "°)" << std::endl;
+          filtered_by_obstacle++;
+          continue;
+        }
+      }
+      
+      // 【低洼区域检测】
+      // 检查周围是否有比当前点低很多的位置（低洼区域）
+      for (const auto &neighbor : cloud->points) {
+        float dx = pt.x - neighbor.x;
+        float dy = pt.y - neighbor.y;
+        float dist_sq = dx * dx + dy * dy;
+        float dist = std::sqrt(dist_sq);
+        
+        if (dist > 0.001f && dist < param_.DEPRESSION_DIST) {
+          // 如果邻居点比当前点低超过2cm，认为是低洼区域
+          if (neighbor.z < pt.z - 0.02f) {
+            min_depression_dist = std::min(min_depression_dist, dist);
+          }
+        }
+      }
+      
+      // 如果距离低洼区域太近（< 1.5cm），过滤该点
+      if (min_depression_dist < 0.015f) {
+        std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] Point filtered by depression: " 
+                  << min_depression_dist * 1000.0f << "mm" << std::endl;
+        filtered_by_obstacle++;
+        continue;
+      }
+      
+      // 【滑移方向检查】
+      // 检查电锤可能滑移的方向，避免滑向低洼区域或深坑
+      if (param_.ENABLE_HOLE_DIR_CHECK && min_depression_dist < std::numeric_limits<float>::max()) {
+        // 计算指向低洼区域的向量
+        for (const auto &neighbor : cloud->points) {
+          if (neighbor.z < pt.z - 0.02f) {
+            float dx = neighbor.x - pt.x;
+            float dy = neighbor.y - pt.y;
+            float dist = std::sqrt(dx * dx + dy * dy);
+            
+            if (dist > 0.001f && dist < param_.DEPRESSION_DIST) {
+              // 归一化指向低洼区域的向量
+              float depression_dir_x = dx / dist;
+              float depression_dir_y = dy / dist;
+              
+              // 计算法向量在XY平面的投影
+              float normal_xy_len = std::sqrt(pt.normal_x * pt.normal_x + pt.normal_y * pt.normal_y);
+              if (normal_xy_len > 0.001f) {
+                float normal_xy_x = pt.normal_x / normal_xy_len;
+                float normal_xy_y = pt.normal_y / normal_xy_len;
+                
+                // 计算点积（夹角的余弦）
+                float dot_product = normal_xy_x * depression_dir_x + normal_xy_y * depression_dir_y;
+                
+                // 如果点积 > 0，说明法向量指向低洼区域方向（夹角 < 90度）
+                if (dot_product > 0.0f) {
+                  std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] Point filtered by slide direction" << std::endl;
+                  is_unstable = true;
+                  break;
+                }
+              }
+            }
+          }
+        }
+      }
+      
+      if (is_unstable) {
+        filtered_by_obstacle++;
+        continue;
+      }
+    }
+
     // --- 3. 智能评分 (Scoring) ---
     float dist_center =
         std::sqrt(std::pow(pt.x - cx, 2) + std::pow(pt.y - cy, 2));
@@ -312,28 +427,58 @@ bool ChiselBox::searchWithCriteria(
       }
 
       // 4. 【动态法向角度限制】：根据距离深坑的距离动态调整法向角度权重
-      // 距离深坑 > 5cm：法向角度放宽到35°（cos(35°)≈0.82）
-      // 距离深坑 3-5cm：法向角度适中25°（cos(25°)≈0.91）
-      // 距离深坑 < 3cm：法向角度严格16°（cos(16°)≈0.90）
+      // X轴是凿击方向，要求法向X分量大（沿着凿击方向）
+      // 距离深坑 > 5cm：法向角度放宽到25°（cos(25°)≈0.91）
+      // 距离深坑 3-5cm：法向角度适中20°（cos(20°)≈0.94）
+      // 距离深坑 < 3cm：法向角度严格16°（cos(16°)≈0.96）
       float norm_weight = param_.ANGLE_WEIGHT;
       if (min_hole_dist < std::numeric_limits<float>::max()) {
         float hole_dist = std::sqrt(min_hole_dist);
         if (hole_dist < 0.03f) {
-          // 距离深坑 < 3cm：极度强调法向垂直度
-          norm_weight *= 2.0f;
+          // 距离深坑 < 3cm：极度强调法向沿着凿击方向
+          norm_weight *= 2.5f;
         } else if (hole_dist < param_.HOLE_SAFE_DIST) {
-          // 距离深坑 3-5cm：适度强调法向垂直度
-          norm_weight *= 1.5f;
+          // 距离深坑 3-5cm：适度强调法向沿着凿击方向
+          norm_weight *= 2.0f;
         }
         // 距离深坑 > 5cm：使用正常权重
       }
-      score += norm_weight * std::abs(pt.normal_z);
+      score += norm_weight * std::abs(pt.normal_x);  // 强调法向X分量（凿击方向）
+      
+      // 5. 【防滑移评分】：惩罚法向向下分量（Z轴是上下，重力方向）
+      // 如果法向有向下的分量（normal_z > 0），给予惩罚
+      if (pt.normal_z > 0.0f) {
+        float slide_penalty = pt.normal_z * param_.CENTER_WEIGHT * 20.0f;
+        score -= slide_penalty;
+      }
+      
+      // 5. 【坡度评分】：优先选择坡度小的位置
+      if (slope_angle > 0.0f) {
+        // 坡度越小，奖励越大
+        float slope_penalty = (slope_angle / param_.MAX_SLOPE_ANGLE) * param_.CURV_WEIGHT * 3.0f;
+        score -= slope_penalty;
+      }
+      
+      // 6. 【低洼区域距离评分】：优先选择远离低洼区域的点
+      if (min_depression_dist < std::numeric_limits<float>::max()) {
+        // 距离越近，惩罚越大
+        if (min_depression_dist < param_.DEPRESSION_DIST) {
+          float depression_penalty = (param_.DEPRESSION_DIST - min_depression_dist) * param_.CENTER_WEIGHT * 15.0f;
+          score -= depression_penalty;
+        }
+      }
     } else {
       // 【平面策略评分】 (原有逻辑)
       // 优先打稍微凸起一点的地方（好破碎）
       score += param_.HEIGHT_WEIGHT * pt.z;
       score -= param_.CURV_WEIGHT * pt.curvature;
-      score += param_.ANGLE_WEIGHT * std::abs(pt.normal_z);
+      score += param_.ANGLE_WEIGHT * std::abs(pt.normal_x);  // 强调法向X分量（凿击方向）
+      
+      // 【防滑移评分】：惩罚法向向下分量（Z轴是上下，重力方向）
+      if (pt.normal_z > 0.0f) {
+        float slide_penalty = pt.normal_z * param_.CENTER_WEIGHT * 10.0f;
+        score -= slide_penalty;
+      }
     }
 
     // 通用：优先打网格中心（但在全局补充时降低权重）

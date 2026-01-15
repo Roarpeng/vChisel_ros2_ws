@@ -136,9 +136,12 @@ private:
 
     // [新增] 读取山腰深坑防滑参数
     param_.MOUNTAIN_HOLE_DIST = this->declare_parameter("MOUNTAIN_HOLE_DIST", 0.04);
-    param_.MOUNTAIN_NORM_TH = this->declare_parameter("MOUNTAIN_NORM_TH", 0.82);
+    param_.MOUNTAIN_NORM_TH = this->declare_parameter("MOUNTAIN_NORM_TH", 0.91);
     param_.HOLE_SAFE_DIST = this->declare_parameter("HOLE_SAFE_DIST", 0.05);
     param_.ENABLE_HOLE_DIR_CHECK = this->declare_parameter("ENABLE_HOLE_DIR_CHECK", true);
+    param_.MAX_SLOPE_ANGLE = this->declare_parameter("MAX_SLOPE_ANGLE", 0.52);
+    param_.SLOPE_CHECK_RADIUS = this->declare_parameter("SLOPE_CHECK_RADIUS", 0.02);
+    param_.DEPRESSION_DIST = this->declare_parameter("DEPRESSION_DIST", 0.03);
 
     // 读取手眼标定矩阵参数
     std::vector<double> row1 = this->declare_parameter(

@@ -46,9 +46,12 @@ typedef struct {
 
   // [新增] 山腰深坑防滑参数
   float MOUNTAIN_HOLE_DIST;  // 山腰位置的深坑安全距离（3-4cm）
-  float MOUNTAIN_NORM_TH;    // 山腰位置的法向角度阈值（35度，cos(35°)≈0.82）
+  float MOUNTAIN_NORM_TH;    // 山腰位置的法向角度阈值（25度，cos(25°)≈0.91）
   float HOLE_SAFE_DIST;      // 深坑安全距离阈值（5cm，用于动态调整法向角度）
   bool ENABLE_HOLE_DIR_CHECK; // 是否启用深坑方向检查
+  float MAX_SLOPE_ANGLE;     // 最大允许坡度（30度，用于防止滑移）
+  float SLOPE_CHECK_RADIUS;  // 坡度检查半径（2cm）
+  float DEPRESSION_DIST;     // 低洼区域检测距离（3cm）
 
   // [新增] 随机模式参数
   float RANDOM_OFFSET_RANGE;  // 随机位置偏移范围
