@@ -11,8 +11,8 @@
 #include <cv_bridge/cv_bridge.h>
 #include <mutex>
 #include <pcl_conversions/pcl_conversions.h>
-#include <pcl/io/pcd_io.h>
 #include <thread>
+#include <pcl/io/pcd_io.h>
 #include <filesystem>
 
 using std::placeholders::_1;
@@ -25,6 +25,40 @@ public:
 
     readParameters();
     initGrids();
+
+    // [新增] 初始化点云保存计数器：从pcd_data文件夹获取最后一个文件编号
+    std::string pcd_dir = "/home/bosch/vChisel_ros2_ws/pcd_data";
+    if (std::filesystem::exists(pcd_dir) && std::filesystem::is_directory(pcd_dir)) {
+      int max_file_num = 0;
+      try {
+        for (const auto& entry : std::filesystem::directory_iterator(pcd_dir)) {
+          if (entry.is_regular_file() && entry.path().extension() == ".pcd") {
+            std::string filename = entry.path().stem().string();
+            try {
+              int file_num = std::stoi(filename);
+              if (file_num > max_file_num) {
+                max_file_num = file_num;
+              }
+            } catch (const std::exception& e) {
+              // 忽略非数字文件名的文件
+            }
+          }
+        }
+        pcd_save_count_ = max_file_num;
+        RCLCPP_INFO(this->get_logger(), "Initialized PCD save count from existing files: %d", pcd_save_count_);
+      } catch (const std::exception& e) {
+        RCLCPP_WARN(this->get_logger(), "Failed to scan pcd_data directory: %s", e.what());
+      }
+    } else {
+      // 创建pcd_data目录（如果不存在）
+      try {
+        std::filesystem::create_directories(pcd_dir);
+        RCLCPP_INFO(this->get_logger(), "Created pcd_data directory: %s", pcd_dir.c_str());
+      } catch (const std::exception& e) {
+        RCLCPP_ERROR(this->get_logger(), "Failed to create pcd_data directory: %s", e.what());
+        enable_pcd_save_ = false;
+      }
+    }
 
     // 1. 发布者 (调试点云 + 可视化图像 + 可视化结果)
     pub_debug_cloud_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
@@ -115,67 +149,51 @@ private:
     search_r_ = this->declare_parameter("SEARCH_RADIUS", 0.02);
     search_n_ = this->declare_parameter("SEARCH_NUM_TH", 30);
 
-    // [新增] 读取平面优先策略参数
-    param_.PLANE_AREA_TH = this->declare_parameter("PLANE_AREA_TH", 0.0001);
-    param_.PLANE_CURV_TH = this->declare_parameter("PLANE_CURV_TH", 0.035);
-    param_.PLANE_NORM_TH = this->declare_parameter("PLANE_NORM_TH", 0.95);
-    param_.PLANE_HOLE_DIST = this->declare_parameter("PLANE_HOLE_DIST", 0.02);
-    param_.PLANE_BONUS = this->declare_parameter("PLANE_BONUS", 5.0);
+    param_.STRICT_NORM_TH = this->declare_parameter("STRICT_NORM_TH", 0.96);
+    param_.STRICT_HOLE_DIST = this->declare_parameter("STRICT_HOLE_DIST", 0.05);
+    param_.STRICT_CURV_TH = this->declare_parameter("STRICT_CURV_TH", 0.04);
 
-    // [新增] 读取凹凸山腰策略参数
-    param_.PROTRUSION_TH = this->declare_parameter("PROTRUSION_TH", 0.02);
-    param_.TIP_CROP_RATIO = this->declare_parameter("TIP_CROP_RATIO", 0.05);
-    param_.BASE_CROP_RATIO = this->declare_parameter("BASE_CROP_RATIO", 0.10);
-    param_.MOUNTAIN_NORM_TH = this->declare_parameter("MOUNTAIN_NORM_TH", 0.91);
-    param_.MOUNTAIN_HOLE_DIST = this->declare_parameter("MOUNTAIN_HOLE_DIST", 0.04);
+    param_.RELAXED_NORM_TH = this->declare_parameter("RELAXED_NORM_TH", 0.86);
+    param_.RELAXED_HOLE_DIST =
+        this->declare_parameter("RELAXED_HOLE_DIST", 0.035);
+    param_.RELAXED_CURV_TH = this->declare_parameter("RELAXED_CURV_TH", 0.10);
 
-    // [新增] 读取凹坑避让参数
-    param_.HOLE_SAFE_DIST = this->declare_parameter("HOLE_SAFE_DIST", 0.05);
-    param_.ENABLE_HOLE_DIR_CHECK = this->declare_parameter("ENABLE_HOLE_DIR_CHECK", true);
-    param_.DEPRESSION_DIST = this->declare_parameter("DEPRESSION_DIST", 0.03);
-    param_.MAX_SLOPE_ANGLE = this->declare_parameter("MAX_SLOPE_ANGLE", 0.52);
-    param_.SLOPE_CHECK_RADIUS = this->declare_parameter("SLOPE_CHECK_RADIUS", 0.02);
-
-    // [新增] 读取防滑移参数
-    param_.MAX_NORMAL_Y = this->declare_parameter("MAX_NORMAL_Y", 0.1);
-    param_.MAX_NORMAL_Z = this->declare_parameter("MAX_NORMAL_Z", 0.1);
-
-    // [新增] 读取评分权重
     param_.HEIGHT_WEIGHT = this->declare_parameter("HEIGHT_WEIGHT", 3.0);
-    param_.CURV_WEIGHT = this->declare_parameter("CURV_WEIGHT", 5.0);
-    param_.ANGLE_WEIGHT = this->declare_parameter("ANGLE_WEIGHT", 12.0);
-    param_.CENTER_WEIGHT = this->declare_parameter("CENTER_WEIGHT", 1.5);
+    param_.CURV_WEIGHT = this->declare_parameter("CURV_WEIGHT", 2.0);
+    param_.ANGLE_WEIGHT = this->declare_parameter("ANGLE_WEIGHT", 1.0);
+    param_.CENTER_WEIGHT = this->declare_parameter("CENTER_WEIGHT", 5.0);
+
+    // [新增] 读取凸起判定参数
+    param_.PROTRUSION_CURV_TH = this->declare_parameter("PROTRUSION_CURV_TH", 0.04);
+    param_.PROTRUSION_TH = this->declare_parameter("PROTRUSION_TH", 0.02);
+    param_.TIP_CROP_RATIO = this->declare_parameter("TIP_CROP_RATIO", 0.25);
+    param_.BASE_CROP_RATIO = this->declare_parameter("BASE_CROP_RATIO", 0.10);
 
     // [新增] 读取随机模式参数
     param_.RANDOM_OFFSET_RANGE = this->declare_parameter("RANDOM_OFFSET_RANGE", 0.02);
-    param_.RANDOM_ANGLE_RANGE = this->declare_parameter("RANDOM_ANGLE_RANGE", 0.14);
+    param_.RANDOM_ANGLE_RANGE = this->declare_parameter("RANDOM_ANGLE_RANGE", 0.35);
 
-    // [新增] 读取局部平面拟合和高度残差参数
-    param_.RESIDUAL_WEIGHT = this->declare_parameter("RESIDUAL_WEIGHT", 8.0);
-    param_.RANSAC_THRESHOLD = this->declare_parameter("RANSAC_THRESHOLD", 0.005);
-    param_.MIN_PLANE_POINTS = this->declare_parameter("MIN_PLANE_POINTS", 30);
+    // [新增] 读取平面面积阈值参数
+    param_.PLANE_AREA_HIGH = this->declare_parameter("PLANE_AREA_HIGH", 0.00035);
+    param_.PLANE_AREA_LOW = this->declare_parameter("PLANE_AREA_LOW", 0.00025);
+    param_.HYBRID_NORM_TH = this->declare_parameter("HYBRID_NORM_TH", 0.885);
+    param_.HYBRID_HOLE_DIST = this->declare_parameter("HYBRID_HOLE_DIST", 0.0425);
+    param_.HYBRID_CURV_TH = this->declare_parameter("HYBRID_CURV_TH", 0.085);
 
-    // [新增] 读取目标高度和Cell停止参数
-    param_.DELTA_Z = this->declare_parameter("DELTA_Z", 0.001);
-    param_.CELL_FLAT_THRESHOLD = this->declare_parameter("CELL_FLAT_THRESHOLD", 0.001);
+    // [新增] 读取平面判定参数（基于曲率阈值内的面积比例）
+    param_.PLANE_FLAT_RATIO_HIGH = this->declare_parameter("PLANE_FLAT_RATIO_HIGH", 0.70);
+    param_.PLANE_FLAT_RATIO_LOW = this->declare_parameter("PLANE_FLAT_RATIO_LOW", 0.50);
+    param_.PLANE_HOLE_DIST = this->declare_parameter("PLANE_HOLE_DIST", 0.015);
+    param_.PLANE_ANGLE_WEIGHT_MULT = this->declare_parameter("PLANE_ANGLE_WEIGHT_MULT", 3.0);
+    param_.PLANE_CURV_WEIGHT_MULT = this->declare_parameter("PLANE_CURV_WEIGHT_MULT", 5.0);
+    param_.PLANE_CENTER_WEIGHT_MULT = this->declare_parameter("PLANE_CENTER_WEIGHT_MULT", 0.2);
+    param_.PLANE_AVOID_CONCAVE_DIST = this->declare_parameter("PLANE_AVOID_CONCAVE_DIST", 0.015);
 
-    // [新增] 读取混合策略参数（平面优先和评分权重优化）
-    param_.FLAT_POINT_BONUS = this->declare_parameter("FLAT_POINT_BONUS", 100.0);
-    param_.CURVATURE_THRESHOLD = this->declare_parameter("CURVATURE_THRESHOLD", 0.03);
-    param_.CELL_STD_THRESHOLD = this->declare_parameter("CELL_STD_THRESHOLD", 0.001);
-
-    // [新增] 读取法向趋同约束参数（防止重复凿击）
-    param_.NORMAL_SIMILARITY_THRESHOLD = this->declare_parameter("NORMAL_SIMILARITY_THRESHOLD", 0.17);
-    param_.POSITION_DISTANCE_THRESHOLD = this->declare_parameter("POSITION_DISTANCE_THRESHOLD", 0.03);
-
-    // [新增] 读取曲率避让参数（平面点避开曲率大于均值区域）
-    param_.CURVATURE_AVOIDANCE_DISTANCE = this->declare_parameter("CURVATURE_AVOIDANCE_DISTANCE", 0.02);
-
-    // [新增] 读取曲率浮动范围参数（用于平面识别）
-    param_.CURVATURE_TOLERANCE = this->declare_parameter("CURVATURE_TOLERANCE", 0.2);
-
-    // [新增] 读取曲率突变参数（用于避开曲率突变区域）
-    param_.CURVATURE_OUTLIER_THRESHOLD = this->declare_parameter("CURVATURE_OUTLIER_THRESHOLD", 3.0);
+    // [新增] 读取凸起策略参数优化
+    param_.PROTRUSION_ANGLE_WEIGHT_MULT = this->declare_parameter("PROTRUSION_ANGLE_WEIGHT_MULT", 2.0);
+    param_.PROTRUSION_CURV_WEIGHT_MULT = this->declare_parameter("PROTRUSION_CURV_WEIGHT_MULT", 2.0);
+    param_.PROTRUSION_HEIGHT_WEIGHT_MULT = this->declare_parameter("PROTRUSION_HEIGHT_WEIGHT_MULT", 0.5);
+    param_.PROTRUSION_CENTER_WEIGHT_MULT = this->declare_parameter("PROTRUSION_CENTER_WEIGHT_MULT", 1.0);
 
     // 读取手眼标定矩阵参数
     std::vector<double> row1 = this->declare_parameter(
@@ -209,161 +227,6 @@ private:
     RCLCPP_INFO(this->get_logger(), "[%.6f, %.6f, %.6f, %.6f]",
       T_cam_tool_(3,0), T_cam_tool_(3,1), T_cam_tool_(3,2), T_cam_tool_(3,3));
     RCLCPP_INFO(this->get_logger(), "===========================");
-
-    // [新增] 注册参数回调，实现YAML文件动态生效
-    auto param_callback_handle = this->add_on_set_parameters_callback(
-      [this](const std::vector<rclcpp::Parameter> & parameters) {
-        rcl_interfaces::msg::SetParametersResult result;
-        result.successful = true;
-
-        for (const auto & param : parameters) {
-          // 混合策略参数
-          if (param.get_name() == "FLAT_POINT_BONUS") {
-            param_.FLAT_POINT_BONUS = param.as_double();
-            RCLCPP_INFO(this->get_logger(), "Parameter updated: FLAT_POINT_BONUS = %f", param_.FLAT_POINT_BONUS);
-          } else if (param.get_name() == "CURVATURE_THRESHOLD") {
-            param_.CURVATURE_THRESHOLD = param.as_double();
-            RCLCPP_INFO(this->get_logger(), "Parameter updated: CURVATURE_THRESHOLD = %f", param_.CURVATURE_THRESHOLD);
-          } else if (param.get_name() == "CELL_STD_THRESHOLD") {
-            param_.CELL_STD_THRESHOLD = param.as_double();
-            RCLCPP_INFO(this->get_logger(), "Parameter updated: CELL_STD_THRESHOLD = %f", param_.CELL_STD_THRESHOLD);
-          }
-          // 法向趋同约束参数
-          else if (param.get_name() == "NORMAL_SIMILARITY_THRESHOLD") {
-            param_.NORMAL_SIMILARITY_THRESHOLD = param.as_double();
-            RCLCPP_INFO(this->get_logger(), "Parameter updated: NORMAL_SIMILARITY_THRESHOLD = %f", param_.NORMAL_SIMILARITY_THRESHOLD);
-          } else if (param.get_name() == "POSITION_DISTANCE_THRESHOLD") {
-            param_.POSITION_DISTANCE_THRESHOLD = param.as_double();
-            RCLCPP_INFO(this->get_logger(), "Parameter updated: POSITION_DISTANCE_THRESHOLD = %f", param_.POSITION_DISTANCE_THRESHOLD);
-          }
-          // 目标高度和Cell停止参数
-          else if (param.get_name() == "DELTA_Z") {
-            param_.DELTA_Z = param.as_double();
-            RCLCPP_INFO(this->get_logger(), "Parameter updated: DELTA_Z = %f", param_.DELTA_Z);
-          } else if (param.get_name() == "CELL_FLAT_THRESHOLD") {
-            param_.CELL_FLAT_THRESHOLD = param.as_double();
-            RCLCPP_INFO(this->get_logger(), "Parameter updated: CELL_FLAT_THRESHOLD = %f", param_.CELL_FLAT_THRESHOLD);
-          }
-          // 局部平面拟合和高度残差参数
-          else if (param.get_name() == "RESIDUAL_WEIGHT") {
-            param_.RESIDUAL_WEIGHT = param.as_double();
-            RCLCPP_INFO(this->get_logger(), "Parameter updated: RESIDUAL_WEIGHT = %f", param_.RESIDUAL_WEIGHT);
-          } else if (param.get_name() == "RANSAC_THRESHOLD") {
-            param_.RANSAC_THRESHOLD = param.as_double();
-            RCLCPP_INFO(this->get_logger(), "Parameter updated: RANSAC_THRESHOLD = %f", param_.RANSAC_THRESHOLD);
-          } else if (param.get_name() == "MIN_PLANE_POINTS") {
-            param_.MIN_PLANE_POINTS = param.as_int();
-            RCLCPP_INFO(this->get_logger(), "Parameter updated: MIN_PLANE_POINTS = %d", param_.MIN_PLANE_POINTS);
-          }
-          // 评分权重参数
-          else if (param.get_name() == "HEIGHT_WEIGHT") {
-            param_.HEIGHT_WEIGHT = param.as_double();
-            RCLCPP_INFO(this->get_logger(), "Parameter updated: HEIGHT_WEIGHT = %f", param_.HEIGHT_WEIGHT);
-          } else if (param.get_name() == "CURV_WEIGHT") {
-            param_.CURV_WEIGHT = param.as_double();
-            RCLCPP_INFO(this->get_logger(), "Parameter updated: CURV_WEIGHT = %f", param_.CURV_WEIGHT);
-          } else if (param.get_name() == "ANGLE_WEIGHT") {
-            param_.ANGLE_WEIGHT = param.as_double();
-            RCLCPP_INFO(this->get_logger(), "Parameter updated: ANGLE_WEIGHT = %f", param_.ANGLE_WEIGHT);
-          } else if (param.get_name() == "CENTER_WEIGHT") {
-            param_.CENTER_WEIGHT = param.as_double();
-            RCLCPP_INFO(this->get_logger(), "Parameter updated: CENTER_WEIGHT = %f", param_.CENTER_WEIGHT);
-          }
-          // 平面优先策略参数
-          else if (param.get_name() == "PLANE_AREA_TH") {
-            param_.PLANE_AREA_TH = param.as_double();
-            RCLCPP_INFO(this->get_logger(), "Parameter updated: PLANE_AREA_TH = %f", param_.PLANE_AREA_TH);
-          } else if (param.get_name() == "PLANE_CURV_TH") {
-            param_.PLANE_CURV_TH = param.as_double();
-            RCLCPP_INFO(this->get_logger(), "Parameter updated: PLANE_CURV_TH = %f", param_.PLANE_CURV_TH);
-          } else if (param.get_name() == "PLANE_NORM_TH") {
-            param_.PLANE_NORM_TH = param.as_double();
-            RCLCPP_INFO(this->get_logger(), "Parameter updated: PLANE_NORM_TH = %f", param_.PLANE_NORM_TH);
-          } else if (param.get_name() == "PLANE_HOLE_DIST") {
-            param_.PLANE_HOLE_DIST = param.as_double();
-            RCLCPP_INFO(this->get_logger(), "Parameter updated: PLANE_HOLE_DIST = %f", param_.PLANE_HOLE_DIST);
-          } else if (param.get_name() == "PLANE_BONUS") {
-            param_.PLANE_BONUS = param.as_double();
-            RCLCPP_INFO(this->get_logger(), "Parameter updated: PLANE_BONUS = %f", param_.PLANE_BONUS);
-          }
-          // 凹凸山腰策略参数
-          else if (param.get_name() == "PROTRUSION_TH") {
-            param_.PROTRUSION_TH = param.as_double();
-            RCLCPP_INFO(this->get_logger(), "Parameter updated: PROTRUSION_TH = %f", param_.PROTRUSION_TH);
-          } else if (param.get_name() == "TIP_CROP_RATIO") {
-            param_.TIP_CROP_RATIO = param.as_double();
-            RCLCPP_INFO(this->get_logger(), "Parameter updated: TIP_CROP_RATIO = %f", param_.TIP_CROP_RATIO);
-          } else if (param.get_name() == "BASE_CROP_RATIO") {
-            param_.BASE_CROP_RATIO = param.as_double();
-            RCLCPP_INFO(this->get_logger(), "Parameter updated: BASE_CROP_RATIO = %f", param_.BASE_CROP_RATIO);
-          } else if (param.get_name() == "MOUNTAIN_NORM_TH") {
-            param_.MOUNTAIN_NORM_TH = param.as_double();
-            RCLCPP_INFO(this->get_logger(), "Parameter updated: MOUNTAIN_NORM_TH = %f", param_.MOUNTAIN_NORM_TH);
-          } else if (param.get_name() == "MOUNTAIN_HOLE_DIST") {
-            param_.MOUNTAIN_HOLE_DIST = param.as_double();
-            RCLCPP_INFO(this->get_logger(), "Parameter updated: MOUNTAIN_HOLE_DIST = %f", param_.MOUNTAIN_HOLE_DIST);
-          }
-          // 凹坑避让参数
-          else if (param.get_name() == "HOLE_SAFE_DIST") {
-            param_.HOLE_SAFE_DIST = param.as_double();
-            RCLCPP_INFO(this->get_logger(), "Parameter updated: HOLE_SAFE_DIST = %f", param_.HOLE_SAFE_DIST);
-          } else if (param.get_name() == "ENABLE_HOLE_DIR_CHECK") {
-            param_.ENABLE_HOLE_DIR_CHECK = param.as_bool();
-            RCLCPP_INFO(this->get_logger(), "Parameter updated: ENABLE_HOLE_DIR_CHECK = %s", param_.ENABLE_HOLE_DIR_CHECK ? "true" : "false");
-          } else if (param.get_name() == "DEPRESSION_DIST") {
-            param_.DEPRESSION_DIST = param.as_double();
-            RCLCPP_INFO(this->get_logger(), "Parameter updated: DEPRESSION_DIST = %f", param_.DEPRESSION_DIST);
-          } else if (param.get_name() == "MAX_SLOPE_ANGLE") {
-            param_.MAX_SLOPE_ANGLE = param.as_double();
-            RCLCPP_INFO(this->get_logger(), "Parameter updated: MAX_SLOPE_ANGLE = %f", param_.MAX_SLOPE_ANGLE);
-          } else if (param.get_name() == "SLOPE_CHECK_RADIUS") {
-            param_.SLOPE_CHECK_RADIUS = param.as_double();
-            RCLCPP_INFO(this->get_logger(), "Parameter updated: SLOPE_CHECK_RADIUS = %f", param_.SLOPE_CHECK_RADIUS);
-          }
-          // 防滑移参数
-          else if (param.get_name() == "MAX_NORMAL_Y") {
-            param_.MAX_NORMAL_Y = param.as_double();
-            RCLCPP_INFO(this->get_logger(), "Parameter updated: MAX_NORMAL_Y = %f", param_.MAX_NORMAL_Y);
-          } else if (param.get_name() == "MAX_NORMAL_Z") {
-            param_.MAX_NORMAL_Z = param.as_double();
-            RCLCPP_INFO(this->get_logger(), "Parameter updated: MAX_NORMAL_Z = %f", param_.MAX_NORMAL_Z);
-          }
-          // 随机模式参数
-          else if (param.get_name() == "RANDOM_OFFSET_RANGE") {
-            param_.RANDOM_OFFSET_RANGE = param.as_double();
-            RCLCPP_INFO(this->get_logger(), "Parameter updated: RANDOM_OFFSET_RANGE = %f", param_.RANDOM_OFFSET_RANGE);
-          } else if (param.get_name() == "RANDOM_ANGLE_RANGE") {
-            param_.RANDOM_ANGLE_RANGE = param.as_double();
-            RCLCPP_INFO(this->get_logger(), "Parameter updated: RANDOM_ANGLE_RANGE = %f", param_.RANDOM_ANGLE_RANGE);
-          }
-          // 曲率避让参数
-          else if (param.get_name() == "CURVATURE_AVOIDANCE_DISTANCE") {
-            param_.CURVATURE_AVOIDANCE_DISTANCE = param.as_double();
-            RCLCPP_INFO(this->get_logger(), "Parameter updated: CURVATURE_AVOIDANCE_DISTANCE = %f", param_.CURVATURE_AVOIDANCE_DISTANCE);
-          }
-          // 曲率浮动范围参数（用于平面识别）
-          else if (param.get_name() == "CURVATURE_TOLERANCE") {
-            param_.CURVATURE_TOLERANCE = param.as_double();
-            RCLCPP_INFO(this->get_logger(), "Parameter updated: CURVATURE_TOLERANCE = %f", param_.CURVATURE_TOLERANCE);
-          }
-          // 曲率突变参数（用于避开曲率突变区域）
-          else if (param.get_name() == "CURVATURE_OUTLIER_THRESHOLD") {
-            param_.CURVATURE_OUTLIER_THRESHOLD = param.as_double();
-            RCLCPP_INFO(this->get_logger(), "Parameter updated: CURVATURE_OUTLIER_THRESHOLD = %f", param_.CURVATURE_OUTLIER_THRESHOLD);
-          }
-          // 其他参数（不存储在ChiselParam中，只在norm_calc_server中使用）
-          else {
-            RCLCPP_WARN(this->get_logger(), "Parameter '%s' cannot be updated dynamically", param.get_name().c_str());
-            result.successful = false;
-            result.reason = "Parameter not supported for dynamic update";
-          }
-        }
-
-        return result;
-      }
-    );
-
-    RCLCPP_INFO(this->get_logger(), "=== Parameter callback registered for dynamic updates ===");
   }
 
   void initGrids() {
@@ -642,28 +505,15 @@ private:
     if (enable_pcd_save_) {
       pcd_save_count_++;
       std::string pcd_dir = "/home/bosch/vChisel_ros2_ws/pcd_data";
-      
-      // 创建pcd_data目录（如果不存在）
-      if (!std::filesystem::exists(pcd_dir)) {
-        try {
-          std::filesystem::create_directories(pcd_dir);
-          RCLCPP_INFO(this->get_logger(), "Created pcd_data directory: %s", pcd_dir.c_str());
-        } catch (const std::exception &e) {
-          RCLCPP_ERROR(this->get_logger(), "Failed to create pcd_data directory: %s", e.what());
-          enable_pcd_save_ = false;
-        }
-      }
-      
+
       // 保存点云文件
-      if (enable_pcd_save_) {
-        std::string pcd_filename = pcd_dir + "/" + std::to_string(pcd_save_count_) + ".pcd";
-        try {
-          pcl::io::savePCDFileBinary(pcd_filename, *raw_cloud);
-          RCLCPP_INFO(this->get_logger(), "Saved point cloud to: %s (%zu points)", 
-                      pcd_filename.c_str(), raw_cloud->size());
-        } catch (const std::exception &e) {
-          RCLCPP_ERROR(this->get_logger(), "Failed to save PCD file: %s", e.what());
-        }
+      std::string pcd_filename = pcd_dir + "/" + std::to_string(pcd_save_count_) + ".pcd";
+      try {
+        pcl::io::savePCDFileBinary(pcd_filename, *raw_cloud);
+        RCLCPP_INFO(this->get_logger(), "Saved point cloud to: %s (%zu points)",
+                    pcd_filename.c_str(), raw_cloud->size());
+      } catch (const std::exception &e) {
+        RCLCPP_ERROR(this->get_logger(), "Failed to save PCD file: %s", e.what());
       }
     }
 

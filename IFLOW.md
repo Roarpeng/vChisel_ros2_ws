@@ -23,14 +23,21 @@ vChisel_ros2_ws/
 │   ├── norm_calc/          # 点云处理包 (C++, ament_cmake)
 │   ├── snap_7/             # PLC通信包 (Python, ament_python)
 │   ├── hand_eye_calib/     # 手眼标定包 (C++ + Python混合, ament_cmake)
+│   ├── aruco_ros/          # ArUco标记检测包
 │   └── vision_opencv/      # OpenCV功能包 (ROS2官方包本地副本)
 ├── build/                  # 构建输出目录 (git忽略)
 ├── install/                # 安装目录 (git忽略)
 ├── log/                    # 日志目录 (git忽略)
+├── pcd_data/               # 点云数据保存目录 (git忽略)
 ├── Testpy/                 # 测试工具目录
 │   └── Tsnap7test.py       # PLC通信测试工具
 ├── start_system.sh         # 系统启动脚本（带日志管理）
 ├── quick_start.sh          # 快速启动脚本
+├── start_hand_eye_calib.sh # 手眼标定启动脚本
+├── stop_hand_eye_calib.sh  # 手眼标定停止脚本
+├── clean_camera_processes.py # 相机进程清理工具
+├── test_camera_cleanup.sh  # 相机清理测试脚本
+├── verify_camera_cleanup.py # 相机清理验证脚本
 └── README.md               # 项目说明文档
 ```
 
@@ -68,11 +75,13 @@ vChisel_ros2_ws/
 - 上一次点位存储和随机模式（位置偏移+法向偏移）
 - 凸起检测和切顶切底策略（基于曲率判断）
 - 备用方案确保每个方格都有点位
+- 点云自动保存功能（支持断点续传）
 
 **依赖**:
 - rclcpp, sensor_msgs, geometry_msgs
 - pcl_conversions, pcl_ros, libpcl-all-dev
 - opencv4, cv_bridge
+- std::filesystem (C++17)
 
 ### 2. snap_7 包
 
@@ -99,6 +108,8 @@ vChisel_ros2_ws/
 - 相机进程管理和状态监控
 - 物理相机连接检测（使用pyrealsense2或lsusb）
 - PLC模拟模式（用于测试）
+- 坐标过滤（X<0或Z>0的无效点位自动丢弃）
+- 点位计数优化（只统计有效点位）
 
 **依赖**:
 - rclpy, norm_calc
@@ -115,6 +126,7 @@ vChisel_ros2_ws/
 - 监控相机数据流
 - 异常时自动重启相机进程
 - 支持重连机制和宽限期设置
+- 启动前清理旧相机进程
 
 ### 3. hand_eye_calib 包
 
@@ -136,13 +148,35 @@ vChisel_ros2_ws/
 - 工具坐标输入（XYZABC格式）
 - 手眼标定计算
 - 交互式标定流程
+- 标定结果配置文件管理
+- ABC角度限制（±30度）
 
 **依赖**:
 - rclcpp, rclpy, geometry_msgs, opencv4
 
 **注意**: 该包是混合类型（ament_cmake + rclpy依赖），构建时需要确保Python模块结构正确
 
-### 4. vision_opencv 包
+### 4. aruco_ros 包
+
+**用途**: ArUco标记检测和姿态估计
+
+**关键文件**:
+- `aruco/src/aruco/` - ArUco库核心实现
+- `aruco_ros/src/` - ROS2接口实现
+- `aruco_ros/launch/realsense_single.launch.py` - RealSense相机单标记检测启动文件
+- `aruco_msgs/` - ArUco消息定义
+
+**主要功能**:
+- ArUco标记检测
+- 标记姿态估计
+- 支持RealSense相机
+- 可视化标记检测结果
+
+**依赖**:
+- rclcpp, rclpy, sensor_msgs, geometry_msgs
+- opencv4, cv_bridge
+
+### 5. vision_opencv 包
 
 **用途**: OpenCV相关功能（ROS2官方包的本地副本，版本3.1.3）
 
@@ -166,7 +200,7 @@ vChisel_ros2_ws/
 
 **注意**: 此包为ROS2官方包的本地副本，包含COLCON_IGNORE标记，默认不构建
 
-### 5. Testpy 目录
+### 6. Testpy 目录
 
 **用途**: 测试工具集合
 
@@ -175,6 +209,21 @@ vChisel_ros2_ws/
   - 支持交互式写入和读取DB2120
   - 用于验证PLC通信功能
   - 默认测试IP: 192.168.110.228
+
+### 7. 工具脚本
+
+**相机进程管理**:
+- `clean_camera_processes.py` - 清理所有RealSense相机进程
+- `test_camera_cleanup.sh` - 测试相机清理功能
+- `verify_camera_cleanup.py` - 验证相机清理结果
+
+**系统启动**:
+- `start_system.sh` - 系统启动脚本（带日志管理）
+- `quick_start.sh` - 快速启动脚本
+
+**手眼标定**:
+- `start_hand_eye_calib.sh` - 手眼标定一键启动脚本
+- `stop_hand_eye_calib.sh` - 手眼标定停止脚本
 
 ## 构建和运行
 
@@ -216,6 +265,7 @@ colcon build
 colcon build --packages-select norm_calc
 colcon build --packages-select snap_7
 colcon build --packages-select hand_eye_calib
+colcon build --packages-select aruco_ros
 
 # 构建并运行测试
 colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release
@@ -256,10 +306,13 @@ ros2 launch snap_7 test_plc_sim.launch.py
 ros2 run snap_7 camera_monitor
 
 # 启动手眼标定系统
-ros2 run hand_eye_calib hand_eye_bringup
+./start_hand_eye_calib.sh
 
 # 启动点云可视化工具
 ros2 run norm_calc norm_viewer
+
+# 启动ArUco标记检测（RealSense相机）
+ros2 launch aruco_ros realsense_single.launch.py
 ```
 
 ### 测试工具
@@ -268,6 +321,12 @@ ros2 run norm_calc norm_viewer
 # 运行PLC通信测试
 cd Testpy
 python3 Tsnap7test.py
+
+# 测试相机清理功能
+./test_camera_cleanup.sh
+
+# 验证相机清理结果
+python3 verify_camera_cleanup.py
 ```
 
 ### 启动文件说明
@@ -279,6 +338,7 @@ python3 Tsnap7test.py
 | `plc_sim.launch.py` | PLC模拟服务器 | plc_sim_server |
 | `test_plc_sim.launch.py` | PLC模拟测试 | plc_sim_server, snap_7_node |
 | `norm_calc_launch.py` | 点云处理服务 | norm_calc_server |
+| `realsense_single.launch.py` | ArUco标记检测 | aruco_ros_single |
 
 **注意**: `system_launch.py` 引用了未编译的可执行文件（image_norm_viewer_node），使用前可能需要更新 CMakeLists.txt 添加相应的源文件。
 
@@ -394,6 +454,12 @@ colcon build --packages-select hand_eye_calib
 2. 增加重连尝试次数（reconnect_attempts）
 3. 确认pyrealsense2正确安装
 
+**问题**: 多个相机进程同时运行
+**解决**:
+1. 使用 `./clean_camera_processes.py` 清理所有相机进程
+2. 使用 `./test_camera_cleanup.sh` 测试清理功能
+3. 使用 `python3 verify_camera_cleanup.py` 验证清理结果
+
 ### 点云处理问题
 
 **问题**: 点云处理结果不理想
@@ -413,6 +479,19 @@ colcon build --packages-select hand_eye_calib
 
 **参考**: norm_calc_params.yaml 文件包含详细的参数调整指南
 
+### 点云保存问题
+
+**问题**: 点云文件被覆盖
+**原因**: 每次启动软件时，计数器从0开始
+**解决**: 系统已优化，启动时会自动扫描pcd_data目录，从最后一个文件编号继续命名
+- 例如：如果目录中有1.pcd到25.pcd，下次启动时新文件将从26.pcd开始
+
+**问题**: 点云保存失败
+**检查项**:
+1. 确认pcd_data目录存在且有写权限
+2. 检查磁盘空间是否充足
+3. 查看日志中的错误信息
+
 ## 日志和调试
 
 ### 日志位置
@@ -420,6 +499,7 @@ colcon build --packages-select hand_eye_calib
 - 系统日志: `/home/bosch/logs/visual.log`（自动管理，超过5MB清空）
 - 构建日志: `log/latest_build/`
 - 运行时日志: 通过 `ros2 run` 或 `ros2 launch` 的标准输出
+- 点云数据: `/home/bosch/vChisel_ros2_ws/pcd_data/`
 
 ### 调试技巧
 
@@ -448,6 +528,9 @@ ros2 node info /node_name
 
 # 查看相机状态（使用camera_monitor）
 ros2 topic echo /camera_status
+
+# 查看点云保存日志
+ros2 topic echo /rosout | grep "Saved point cloud"
 ```
 
 ## 扩展开发
@@ -514,6 +597,7 @@ colcon test-result --all
 - **相机测试**: 使用 `opencv_tests/` 中的测试脚本
 - **点云处理测试**: 提供测试点云数据并验证输出
 - **PLC连接测试**: 使用 `Testpy/Tsnap7test.py` 进行交互式测试
+- **相机清理测试**: 使用 `./test_camera_cleanup.sh` 和 `python3 verify_camera_cleanup.py`
 
 ## 版本控制
 
@@ -524,6 +608,7 @@ colcon test-result --all
 /build
 /install
 /log
+/pcd_data
 ```
 
 ### 提交建议
@@ -549,6 +634,46 @@ colcon test-result --all
 ---
 
 ## 项目更新日志
+
+### 2026-01-16 - visual_base分支：点云保存功能优化（断点续传）
+
+#### 核心改进
+- ✅ 实现点云保存断点续传功能
+- ✅ 启动时自动扫描pcd_data目录，获取最后一个文件编号
+- ✅ 后续拍照从最后一个编号继续命名，避免覆盖
+- ✅ 自动创建pcd_data目录（如果不存在）
+
+#### 技术实现
+
+**初始化逻辑**（在构造函数中）:
+1. 检查 `/home/bosch/vChisel_ros2_ws/pcd_data` 目录是否存在
+2. 如果存在，扫描所有 `.pcd` 文件
+3. 提取文件名中的数字编号，找到最大值
+4. 将最大值赋值给 `pcd_save_count_`
+5. 如果不存在，自动创建目录
+
+**保存逻辑**（在handleService函数中）:
+1. 每次拍照后 `pcd_save_count_` 递增
+2. 保存为 `{编号}.pcd` 格式
+3. 记录保存日志（文件名和点数量）
+
+#### 工作原理
+
+1. **首次启动**：如果 `pcd_data` 目录为空，`pcd_save_count_` 初始化为 0，第一个保存的文件是 `1.pcd`
+2. **再次启动**：扫描目录中已有的文件（如 `1.pcd` 到 `25.pcd`），找到最大编号 `25`，`pcd_save_count_` 初始化为 25，下一个保存的文件是 `26.pcd`
+3. **后续拍照**：每次拍照后 `pcd_save_count_` 递增，保存新文件
+
+#### 文件修改
+- ✅ `src/norm_calc/src/norm_calc_server.cpp` - 添加启动时扫描pcd_data目录的逻辑
+
+#### 构建状态
+- ✅ 构建成功，无编译错误
+
+#### 问题解决
+- ✅ 解决每次启动软件时点云文件被覆盖的问题
+- ✅ 实现点云保存的断点续传功能
+
+---
 
 ### 2026-01-15 - visual_base分支：平面优先策略、防滑移优化和点云保存功能
 
@@ -929,7 +1054,7 @@ RANDOM_ANGLE_RANGE: 0.35   # 随机法向角度范围（弧度，默认20°）
 
 ### 分支信息
 - **当前分支**: visual_base
-- **最新提交**: c095886 - "feat(plc_client): 增加相机进程清理和坐标过滤功能"
+- **最新提交**: deff3d3 - "feat(norm_calc): 新增曲率相关参数和优化凿击策略"
 - **远程仓库**: git@github.com:Roarpeng/vChisel_ros2_ws.git
 - **分支状态**: 已推送到远程仓库，可正常使用
 
@@ -938,6 +1063,7 @@ RANDOM_ANGLE_RANGE: 0.35   # 随机法向角度范围（弧度，默认20°）
 | 功能模块 | 状态 | 说明 |
 |---------|------|------|
 | 点云处理 | ✅ 正常 | 三段式策略（严格→宽松→随机），确保每个方格都有点位 |
+| 点云保存 | ✅ 正常 | 自动保存，支持断点续传 |
 | 手眼标定 | ✅ 正常 | 配置文件管理，支持热更新 |
 | PLC通信 | ✅ 正常 | ABC角度限制，弧度制输出，坐标过滤（X>0, z<0） |
 | ArUco检测 | ✅ 正常 | 支持RealSense相机 |
@@ -962,6 +1088,7 @@ RANDOM_ANGLE_RANGE: 0.35   # 随机法向角度范围（弧度，默认20°）
 - [ ] 添加点位质量评估指标
 - [ ] 测试坐标过滤功能（X>0, z<0）
 - [ ] 测试相机进程清理功能
+- [ ] 测试点云保存断点续传功能
 
 ### 配置参数摘要
 
@@ -1000,6 +1127,12 @@ RANDOM_ANGLE_RANGE: 0.35   # 随机法向角度范围（弧度，默认20°）
 - C角（X轴旋转）: ±30°
 - 输出格式: 弧度制
 
+**点云保存**:
+- 保存位置: `/home/bosch/vChisel_ros2_ws/pcd_data/`
+- 文件命名: `{编号}.pcd`（如 1.pcd, 2.pcd, 26.pcd）
+- 断点续传: 启动时自动扫描最后一个文件编号
+- 自动创建: 目录不存在时自动创建
+
 ### 测试建议
 
 1. **手眼标定测试**
@@ -1033,3 +1166,9 @@ RANDOM_ANGLE_RANGE: 0.35   # 随机法向角度范围（弧度，默认20°）
    - 验证关闭相机后不再接收图像
    - 测试多次启动/关闭循环
    - 验证只有一个相机进程在运行
+
+6. **点云保存测试**
+   - 测试点云自动保存功能
+   - 测试断点续传功能（重启后从最后一个编号继续）
+   - 验证文件命名正确性
+   - 验证文件内容完整性

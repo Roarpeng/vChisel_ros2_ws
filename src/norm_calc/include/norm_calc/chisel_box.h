@@ -26,80 +26,53 @@ typedef struct {
   float XMIN, XMAX; // [修复] 补全 XMAX
   float YMIN, YMAX; // [修复] 补全 YMAX
 
-  // [新增] 平面优先策略参数
-  float PLANE_AREA_TH;       // 平面面积阈值（1平方cm）
-  float PLANE_CURV_TH;       // 平面曲率阈值（< 0.035 认为平面）
-  float PLANE_NORM_TH;       // 平面法向阈值（cos(18°)≈0.95）
-  float PLANE_HOLE_DIST;     // 平面避障距离（2cm）
-  float PLANE_BONUS;         // 平面奖励权重
+  float STRICT_NORM_TH;
+  float STRICT_HOLE_DIST;
+  float STRICT_CURV_TH;
 
-  // [新增] 凹凸山腰策略参数
-  float PROTRUSION_TH;       // 凸起高度差阈值（2cm）
-  float TIP_CROP_RATIO;      // 切顶比例基准值（动态调整）
-  float BASE_CROP_RATIO;     // 切底比例（固定10%）
-  float MOUNTAIN_NORM_TH;    // 山腰法向阈值（cos(25°)≈0.91）
-  float MOUNTAIN_HOLE_DIST;  // 山腰避障距离（4cm）
+  float RELAXED_NORM_TH;
+  float RELAXED_HOLE_DIST;
+  float RELAXED_CURV_TH;
 
-  // [新增] 凹坑避让参数
-  float HOLE_SAFE_DIST;      // 凹坑安全距离（5cm）
-  bool ENABLE_HOLE_DIR_CHECK; // 启用凹坑方向检查
-  float DEPRESSION_DIST;     // 低洼区域检测距离（3cm）
-  float MAX_SLOPE_ANGLE;     // 最大允许坡度（30度）
-  float SLOPE_CHECK_RADIUS;  // 坡度检查半径（2cm）
+  float HEIGHT_WEIGHT;
+  float CURV_WEIGHT;
+  float ANGLE_WEIGHT;
+  float CENTER_WEIGHT;
 
-  // [新增] 防滑移参数
-  float MAX_NORMAL_Y;        // 最大法向Y分量（防止向右滑移）
-  float MAX_NORMAL_Z;        // 最大法向Z分量（防止向下滑移）
-
-  // [新增] 评分权重
-  float HEIGHT_WEIGHT;        // 高度权重（山腰优先）
-  float CURV_WEIGHT;          // 曲率权重（平整度优先）
-  float ANGLE_WEIGHT;         // 法向角度权重（垂直度优先）
-  float CENTER_WEIGHT;        // 中心权重（降低）
+  // [新增] 凸起策略参数
+  float PROTRUSION_CURV_TH;  // 判定为凸起的曲率阈值（平均曲率超过此值判定为凸起）
+  float PROTRUSION_TH;   // 判定为凸起的高度差阈值
+  float TIP_CROP_RATIO;  // 切顶比例
+  float BASE_CROP_RATIO; // 切底比例
 
   // [新增] 随机模式参数
   float RANDOM_OFFSET_RANGE;  // 随机位置偏移范围
   float RANDOM_ANGLE_RANGE;   // 随机法向角度范围
 
-  // [新增] 局部平面拟合和高度残差参数
-  float RESIDUAL_WEIGHT;      // 高度残差权重（凸起优先）
-  float RANSAC_THRESHOLD;     // RANSAC平面拟合阈值（米）
-  int MIN_PLANE_POINTS;       // RANSAC平面拟合最小点数
+  // [新增] 平面面积阈值（平方米）
+  float PLANE_AREA_HIGH;  // 3.5cm² - 平面模式阈值
+  float PLANE_AREA_LOW;   // 2.5cm² - 凹凸面模式阈值
 
-  // [新增] 目标高度和Cell停止参数
-  float DELTA_Z;              // 期望削减量（米，每次凿击期望下降的高度）
-  float CELL_FLAT_THRESHOLD;  // Cell停止阈值（米，高度差小于此值时标记为完成）
+  // [新增] 混合模式参数
+  float HYBRID_NORM_TH;   // 混合法向阈值
+  float HYBRID_HOLE_DIST; // 混合避障距离
+  float HYBRID_CURV_TH;   // 混合曲率阈值
 
-  // [新增] 混合策略参数（平面优先和评分权重优化）
-  float FLAT_POINT_BONUS;     // 平面点奖励（平面优先）
-  float CURVATURE_THRESHOLD;  // 曲率阈值（用于平面识别）
-  float CELL_STD_THRESHOLD;   // Cell停止标准差阈值（米）
+// [新增] 平面判定参数（基于曲率阈值内的面积比例）
+  float PLANE_FLAT_RATIO_HIGH;  // 平面点比例上限（>此值判定为平面，默认0.7）
+  float PLANE_FLAT_RATIO_LOW;   // 平面点比例下限（<此值判定为凸起，默认0.5）
+  float PLANE_HOLE_DIST;        // 平面区域避障距离（默认0.015m，即1.5cm）
+  float PLANE_ANGLE_WEIGHT_MULT;  // 平面策略法向权重倍数（默认3.0）
+  float PLANE_CURV_WEIGHT_MULT;   // 平面策略曲率权重倍数（默认5.0）
+  float PLANE_CENTER_WEIGHT_MULT; // 平面策略中心权重倍数（默认0.2）
+  float PLANE_AVOID_CONCAVE_DIST;  // 平面区域避开凹面边缘的距离（默认0.015m，即1.5cm）
 
-  // [新增] 法向趋同约束参数（防止重复凿击）
-  float NORMAL_SIMILARITY_THRESHOLD;  // 法向趋同阈值（弧度，法向角度差小于此值时认为趋同）
-
-  // [新增] 位置距离避让参数（防止重复凿击）
-  float POSITION_DISTANCE_THRESHOLD;  // 位置距离阈值（米，与上次点位的距离小于此值时认为太近）
-
-  // [新增] 曲率避让参数（平面点避开曲率大于均值区域）
-  float CURVATURE_AVOIDANCE_DISTANCE;  // 曲率避让距离（米，平面点需要避开曲率大于均值区域的距离）
-
-  // [新增] 曲率浮动范围参数（用于平面识别）
-  float CURVATURE_TOLERANCE;  // 曲率浮动范围（曲率在均值左右浮动此范围内认为是平面）
-
-  // [新增] 曲率突变参数（用于避开曲率突变区域）
-  float CURVATURE_OUTLIER_THRESHOLD;  // 曲率突变阈值（标准差的倍数，曲率 > 均值 + k * 标准差认为是突变）
+  // [新增] 凸起策略参数优化
+  float PROTRUSION_ANGLE_WEIGHT_MULT;  // 凸起策略法向权重倍数（默认2.0，确保山腰点垂直）
+  float PROTRUSION_CURV_WEIGHT_MULT;   // 凸起策略曲率权重倍数（默认2.0，加倍惩罚曲率）
+  float PROTRUSION_HEIGHT_WEIGHT_MULT; // 凸起策略高度权重倍数（默认0.5，弱化高度权重）
+  float PROTRUSION_CENTER_WEIGHT_MULT; // 凸起策略中心权重倍数（默认1.0，优先选择网格中心）
 } ChiselParam;
-
-// [新增] 局部参考平面结构体
-struct LocalPlane {
-  Eigen::Vector3f normal;    // 平面法向量
-  float d;                    // 平面方程: n·p + d = 0
-  float avg_height;           // 平均高度
-  float max_residual;         // 最大高度残差
-  bool is_valid;              // 平面是否有效
-  LocalPlane() : d(0.0f), avg_height(0.0f), max_residual(0.0f), is_valid(false) {}
-};
 
 class ChiselBox {
 public:
@@ -127,6 +100,9 @@ private:
   ChiselParam param_;
   BoxState state_;
 
+  // [新增] 搜索模式枚举
+  enum SearchMode { MODE_PLANE, MODE_HYBRID, MODE_PROTRUSION };
+
   // [新增] 上一次点位存储
   pcl::PointXYZRGBNormal last_point_;
   bool has_last_point_;
@@ -134,60 +110,19 @@ private:
   // [新增] 计算点云的凸包面积（平方米）
   float calculateConvexHullArea(pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud);
 
+  // [新增] 根据面积确定搜索模式
+  SearchMode determineSearchMode(float area);
+
   // [新增] 随机模式搜索（基于上一次点位或网格中心）
   bool searchWithRandomMode(pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud,
                            pcl::PointCloud<pcl::PointXYZ>::Ptr obstacles,
                            pcl::PointXYZRGBNormal &result);
 
-  // [新增] 拟合局部参考平面（使用RANSAC）
-  bool fitLocalPlane(pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud, LocalPlane& plane);
-
-  // [新增] 计算点相对于局部平面的高度残差
-  float calculateHeightResidual(const pcl::PointXYZRGBNormal& point, const LocalPlane& plane);
-
-  // [新增] 计算点云的中位数高度
-  float calculateMedian(pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud);
-
-  // [新增] 计算目标高度（中位数 - 期望削减量）
-  float calculateTargetHeight(pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud);
-
-  // [新增] 检查Cell是否完成（高度差小于阈值）
-  bool isCellComplete(pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud);
-
-  // [新增] 计算点云的标准差（用于Cell停止条件）
-  float calculateStandardDeviation(pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud);
-
-  // [新增] 检查法向是否趋同（防止重复凿击）
-  bool isNormalSimilar(const pcl::PointXYZRGBNormal& current_point,
-                      const pcl::PointXYZRGBNormal& last_point);
-
-  // [新增] 检查位置距离是否太近（防止重复凿击）
-  bool isPositionTooClose(const pcl::PointXYZRGBNormal& current_point,
-                         const pcl::PointXYZRGBNormal& last_point);
-
-  // [新增] 简化策略：在平面中心凿击
-  bool findPlaneCenterPoint(pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud,
-                             pcl::PointCloud<pcl::PointXYZ>::Ptr obstacles,
-                             pcl::PointXYZRGBNormal &result);
-
-  // [新增] 简化策略：在山腰位置凿击（高度差的均值）
-  bool findMountainWaistPoint(pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud,
-                               pcl::PointCloud<pcl::PointXYZ>::Ptr obstacles,
-                               pcl::PointXYZRGBNormal &result);
-
-  // [新增] 简化策略：扩大搜索区域（20%）
-  bool findExpandedRegionPoint(pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud,
-                               pcl::PointCloud<pcl::PointXYZ>::Ptr obstacles,
-                               pcl::PointXYZRGBNormal &result);
-
   // 内部通用搜索逻辑
   bool searchWithCriteria(pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud,
                           pcl::PointCloud<pcl::PointXYZ>::Ptr obstacles,
                           float norm_th, float hole_dist_th, float curv_th,
-                          pcl::PointXYZRGBNormal &result,
-                          bool is_large_plane = false,
-                          bool is_plane = false,
-                          float z_target = 0.0f);
+                          pcl::PointXYZRGBNormal &result);
 };
 
 } // namespace chisel_box
