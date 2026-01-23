@@ -110,6 +110,8 @@ private:
   std::vector<std::shared_ptr<chisel_box::ChiselBox>> grids_;
   pcl::PointCloud<pcl::PointXYZ>::Ptr global_obstacles_{
       new pcl::PointCloud<pcl::PointXYZ>};
+  pcl::PointCloud<pcl::PointXYZ>::Ptr last_success_points_{
+      new pcl::PointCloud<pcl::PointXYZ>};  // 存储上一次成功的点位，用于避让
 
   std::mutex data_mutex_;
   cv::Mat img_color_, img_depth_;
@@ -176,6 +178,11 @@ private:
     // [新增] 读取平面面积阈值参数
     param_.PLANE_AREA_HIGH = this->declare_parameter("PLANE_AREA_HIGH", 0.00035);
     param_.PLANE_AREA_LOW = this->declare_parameter("PLANE_AREA_LOW", 0.00025);
+
+    // [新增] 读取Z-range阈值参数
+    param_.Z_RANGE_HYBRID_TH = this->declare_parameter("Z_RANGE_HYBRID_TH", 0.03);
+    param_.Z_RANGE_PROTRUSION_TH = this->declare_parameter("Z_RANGE_PROTRUSION_TH", 0.05);
+
     param_.HYBRID_NORM_TH = this->declare_parameter("HYBRID_NORM_TH", 0.885);
     param_.HYBRID_HOLE_DIST = this->declare_parameter("HYBRID_HOLE_DIST", 0.0425);
     param_.HYBRID_CURV_TH = this->declare_parameter("HYBRID_CURV_TH", 0.085);
@@ -418,35 +425,11 @@ private:
       std::shared_ptr<norm_calc::srv::NormCalcData::Response> res) {
     RCLCPP_INFO(this->get_logger(), ">>> Processing Request Seq: %d", req->seq);
 
-    // 【修改点】智能状态重置
-    // 只重置 STATE_COMPLETED 的网格，保留 STATE_SKIPPED_ONCE 的状态
-    // 这样第一轮失败的网格会在第二轮尝试宽松模式
-    int pending_count = 0;
+    // 重置所有网格状态，每次拍照计算都是从头开始
     for (auto &grid : grids_) {
-      if (grid->getState() == chisel_box::STATE_COMPLETED) {
-        grid->reset();
-      } else if (grid->getState() == chisel_box::STATE_PENDING) {
-        pending_count++;
-      }
+      grid->reset();
     }
-
-    // 如果所有网格都是 STATE_PENDING（第一次运行），则全部重置
-    if (pending_count == (int)grids_.size()) {
-      for (auto &grid : grids_)
-        grid->reset();
-      RCLCPP_INFO(this->get_logger(), "State Reset: All grids PENDING (first run).");
-    } else {
-      RCLCPP_INFO(this->get_logger(), "State Reset: Only COMPLETED grids reset, SKIPPED grids kept for relaxed mode.");
-    }
-
-    global_obstacles_->clear();
-
-    if (req->seq == 0) {
-      for (auto &grid : grids_)
-        grid->reset();
-      global_obstacles_->clear();
-      RCLCPP_INFO(this->get_logger(), "State Reset: All grids PENDING (seq=0).");
-    }
+    RCLCPP_INFO(this->get_logger(), "State Reset: All grids reset for new calculation.");
 
     // 1. 等待数据
     {
@@ -522,7 +505,12 @@ private:
         new pcl::PointCloud<pcl::PointXYZ>);
     holeDetector(color_snap, depth_snap, info_snap, vision_holes);
     RCLCPP_INFO(this->get_logger(), "[DEBUG] Detected %zu holes (obstacles)", vision_holes->size());
+
+    // 清空障碍物列表，添加检测到的空洞和上一次成功的点位
+    global_obstacles_->clear();
     *global_obstacles_ += *vision_holes;
+    *global_obstacles_ += *last_success_points_;  // 添加上一次成功的点位用于避让
+    RCLCPP_INFO(this->get_logger(), "[DEBUG] Added %zu previous success points as obstacles", last_success_points_->size());
 
     // 6. 预处理
     pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr processed_cloud(
@@ -550,6 +538,10 @@ private:
     geometry_msgs::msg::PoseArray visual_poses;
     visual_poses.header = info_snap.header;
 
+    // 临时存储当前成功的点位，用于下一轮避让
+    pcl::PointCloud<pcl::PointXYZ>::Ptr current_success_points(
+        new pcl::PointCloud<pcl::PointXYZ>);
+
     for (auto &grid : grids_) {
       pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr roi_cloud(
           new pcl::PointCloud<pcl::PointXYZRGBNormal>);
@@ -576,15 +568,21 @@ private:
         cam_pose.orientation.w = 0; // 标记
         visual_poses.poses.push_back(cam_pose);
 
-        pcl::PointXYZ new_obstacle;
-        new_obstacle.x = target.x;
-        new_obstacle.y = target.y;
-        new_obstacle.z = target.z;
-        global_obstacles_->push_back(new_obstacle);
+        // 3. 存储当前成功的点位，用于下一轮避让
+        pcl::PointXYZ pt;
+        pt.x = target.x;
+        pt.y = target.y;
+        pt.z = target.z;
+        current_success_points->push_back(pt);
 
         plan_count++;
       }
     }
+
+    // 保存当前成功的点位到 last_success_points_，供下一轮使用
+    last_success_points_->clear();
+    *last_success_points_ = *current_success_points;
+    RCLCPP_INFO(this->get_logger(), "[DEBUG] Saved %zu current success points for next round", last_success_points_->size());
 
     // 9. 检查点位数量，动态调整权重和触发宽松模式
     int min_points_threshold = (int)(grids_.size() * 0.5);
@@ -644,11 +642,12 @@ private:
             cam_pose.orientation.w = 0;
             visual_poses.poses.push_back(cam_pose);
 
-            pcl::PointXYZ new_obstacle;
-            new_obstacle.x = target.x;
-            new_obstacle.y = target.y;
-            new_obstacle.z = target.z;
-            global_obstacles_->push_back(new_obstacle);
+            // 3. 存储当前成功的点位，用于下一轮避让
+            pcl::PointXYZ pt;
+            pt.x = target.x;
+            pt.y = target.y;
+            pt.z = target.z;
+            current_success_points->push_back(pt);
 
             plan_count++;
             relaxed_count++;

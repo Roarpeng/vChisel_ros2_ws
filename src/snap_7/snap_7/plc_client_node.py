@@ -44,6 +44,7 @@ class PLCClientNode(Node):
         self.declare_parameter('db_start', 0)  # byte offset
         self.declare_parameter('poll_rate', 20.0)  # Hz
         self.declare_parameter('simulate_plc', False)  # Add simulate mode parameter
+        self.declare_parameter('max_euler_angle_degrees', 30.0)  # 最大欧拉角限制（度），默认30度
 
         self.plc_address = self.get_parameter('plc_address').get_parameter_value().string_value
         self.plc_rack = self.get_parameter('plc_rack').get_parameter_value().integer_value
@@ -52,6 +53,8 @@ class PLCClientNode(Node):
         self.db_start = self.get_parameter('db_start').get_parameter_value().integer_value
         self.poll_rate = float(self.get_parameter('poll_rate').get_parameter_value().double_value)
         self.simulate_plc = self.get_parameter('simulate_plc').get_parameter_value().bool_value
+        self.max_euler_angle_degrees = float(self.get_parameter('max_euler_angle_degrees').get_parameter_value().double_value)
+        self.max_euler_angle_rad = self.max_euler_angle_degrees * math.pi / 180.0  # 转换为弧度
 
         if snap7 is None:
             self.get_logger().error('python-snap7 is not installed. Install it with pip install snap7')
@@ -215,11 +218,11 @@ class PLCClientNode(Node):
         return [z, y, x]
 
     def clamp_euler_angles(self, euler_rad):
-        """限制欧拉角在±30度范围内
+        """限制欧拉角在配置的最大角度范围内
         输入：[Z, Y, X] 欧拉角（弧度）
         输出：限制后的 [Z, Y, X] 欧拉角（弧度）
         """
-        max_angle = math.pi / 6.0  # 30度 = π/6 弧度
+        max_angle = self.max_euler_angle_rad  # 使用配置的最大角度（弧度）
 
         z_clamped = max(-max_angle, min(max_angle, euler_rad[0]))
         y_clamped = max(-max_angle, min(max_angle, euler_rad[1]))
@@ -827,7 +830,7 @@ class PLCClientNode(Node):
                     qx, qy, qz, qw = pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w
                     euler_rad = self.quaternion_to_euler_zyx(qx, qy, qz, qw)
 
-                    # 限制欧拉角在±30度范围内
+                    # 限制欧拉角在配置的最大角度范围内
                     clamped_euler_rad = self.clamp_euler_angles(euler_rad)
 
                     # 添加位置和欧拉角数据（ABC，弧度）

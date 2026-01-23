@@ -25,31 +25,67 @@ bool ChiselBox::findBestPoint(
 
   bool found = false;
 
-  // === 三段式策略：严格模式 → 宽松模式 → 随机模式 ===
-
+  // === 基于面积的智能策略：先计算面积和Z-range，选择合适的模式 ===
   if (state_ == STATE_PENDING) {
-    // 【第一次尝试】：严格模式
-    std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] Attempt 1: STRICT mode" << std::endl;
-    found = searchWithCriteria(cloud_roi, obstacles,
-                               param_.STRICT_NORM_TH,
-                               param_.STRICT_HOLE_DIST,
-                               param_.STRICT_CURV_TH,
-                               out_point);
+    // 计算Z-range
+    float z_min = std::numeric_limits<float>::max();
+    float z_max = -std::numeric_limits<float>::max();
+    for (const auto &pt : cloud_roi->points) {
+      if (pt.z < z_min)
+        z_min = pt.z;
+      if (pt.z > z_max)
+        z_max = pt.z;
+    }
+    float z_range = z_max - z_min;
+
+    // 计算凸包面积
+    float area = calculateConvexHullArea(cloud_roi);
+    SearchMode mode = determineSearchMode(area, z_range);
+
+    // 根据模式选择参数
+    float norm_th, hole_dist_th, curv_th;
+    std::string mode_name;
+
+    switch (mode) {
+      case MODE_PLANE:
+        norm_th = param_.STRICT_NORM_TH;
+        hole_dist_th = param_.STRICT_HOLE_DIST;
+        curv_th = param_.STRICT_CURV_TH;
+        mode_name = "PLANE (25.8°)";
+        break;
+      case MODE_HYBRID:
+        norm_th = param_.HYBRID_NORM_TH;
+        hole_dist_th = param_.HYBRID_HOLE_DIST;
+        curv_th = param_.HYBRID_CURV_TH;
+        mode_name = "HYBRID (35°)";
+        break;
+      case MODE_PROTRUSION:
+        norm_th = param_.RELAXED_NORM_TH;
+        hole_dist_th = param_.RELAXED_HOLE_DIST;
+        curv_th = param_.RELAXED_CURV_TH;
+        mode_name = "PROTRUSION (45°)";
+        break;
+    }
+
+    std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] Attempt 1: " << mode_name << " (Z-range: " << (z_range * 1000.0f) << "mm)" << std::endl;
+    found = searchWithCriteria(cloud_roi, obstacles, norm_th, hole_dist_th, curv_th, out_point);
     if (found) {
       state_ = STATE_COMPLETED;
       last_point_ = out_point;
       has_last_point_ = true;
-      std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] STRICT mode succeeded" << std::endl;
+      std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] " << mode_name << " succeeded" << std::endl;
       return true;
     } else {
       state_ = STATE_SKIPPED_ONCE;
-      std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] STRICT mode failed, trying RELAXED mode" << std::endl;
+      std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] " << mode_name << " failed, trying RELAXED mode" << std::endl;
     }
   }
 
+  // === 后备策略：三段式降级 ===
+
   if (state_ == STATE_SKIPPED_ONCE) {
-    // 【第二次尝试】：宽松模式
-    std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] Attempt 2: RELAXED mode" << std::endl;
+    // 【第二次尝试】：宽松模式（45°）
+    std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] Attempt 2: RELAXED mode (45°)" << std::endl;
     found = searchWithCriteria(cloud_roi, obstacles,
                                param_.RELAXED_NORM_TH,
                                param_.RELAXED_HOLE_DIST,
@@ -473,17 +509,22 @@ float ChiselBox::calculateConvexHullArea(pcl::PointCloud<pcl::PointXYZRGBNormal>
   return area;
 }
 
-// [新增] 根据面积确定搜索模式
-ChiselBox::SearchMode ChiselBox::determineSearchMode(float area) {
-  const float PLANE_AREA_HIGH = param_.PLANE_AREA_HIGH;  // 0.00035 m² (3.5cm²)
-  const float PLANE_AREA_LOW = param_.PLANE_AREA_LOW;   // 0.00025 m² (2.5cm²)
+// [新增] 根据面积和Z-range确定搜索模式
+ChiselBox::SearchMode ChiselBox::determineSearchMode(float area, float z_range) {
+  // 优先判断Z-range：如果表面起伏太大，即使面积大也使用更大的角度
+  if (z_range > param_.Z_RANGE_PROTRUSION_TH) {
+    return MODE_PROTRUSION;  // 45°
+  } else if (z_range > param_.Z_RANGE_HYBRID_TH) {
+    return MODE_HYBRID;  // 35°
+  }
 
-  if (area >= PLANE_AREA_HIGH) {
-    return MODE_PLANE;
-  } else if (area >= PLANE_AREA_LOW) {
-    return MODE_HYBRID;
+  // 如果Z-range在合理范围内，按面积判断
+  if (area >= param_.PLANE_AREA_HIGH) {
+    return MODE_PLANE;  // 25.8°
+  } else if (area >= param_.PLANE_AREA_LOW) {
+    return MODE_HYBRID;  // 35°
   } else {
-    return MODE_PROTRUSION;
+    return MODE_PROTRUSION;  // 45°
   }
 }
 
