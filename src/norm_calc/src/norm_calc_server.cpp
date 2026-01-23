@@ -538,10 +538,6 @@ private:
     geometry_msgs::msg::PoseArray visual_poses;
     visual_poses.header = info_snap.header;
 
-    // 临时存储当前成功的点位，用于下一轮避让
-    pcl::PointCloud<pcl::PointXYZ>::Ptr current_success_points(
-        new pcl::PointCloud<pcl::PointXYZ>);
-
     for (auto &grid : grids_) {
       pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr roi_cloud(
           new pcl::PointCloud<pcl::PointXYZRGBNormal>);
@@ -568,20 +564,24 @@ private:
         cam_pose.orientation.w = 0; // 标记
         visual_poses.poses.push_back(cam_pose);
 
-        // 3. 存储当前成功的点位，用于下一轮避让
+        // 3. 立即将当前成功的点位添加到 global_obstacles_，用于后续网格避让
         pcl::PointXYZ pt;
         pt.x = target.x;
         pt.y = target.y;
         pt.z = target.z;
-        current_success_points->push_back(pt);
+        global_obstacles_->push_back(pt);
 
         plan_count++;
       }
     }
 
     // 保存当前成功的点位到 last_success_points_，供下一轮使用
+    // global_obstacles_ 在计算过程中被添加了新的点位，需要提取出来
+    size_t initial_obstacle_count = vision_holes->size() + last_success_points_->size();
     last_success_points_->clear();
-    *last_success_points_ = *current_success_points;
+    for (size_t i = initial_obstacle_count; i < global_obstacles_->size(); ++i) {
+        last_success_points_->push_back(global_obstacles_->points[i]);
+    }
     RCLCPP_INFO(this->get_logger(), "[DEBUG] Saved %zu current success points for next round", last_success_points_->size());
 
     // 9. 检查点位数量，动态调整权重和触发宽松模式
@@ -642,12 +642,12 @@ private:
             cam_pose.orientation.w = 0;
             visual_poses.poses.push_back(cam_pose);
 
-            // 3. 存储当前成功的点位，用于下一轮避让
+            // 3. 立即将当前成功的点位添加到 global_obstacles_，用于后续网格避让
             pcl::PointXYZ pt;
             pt.x = target.x;
             pt.y = target.y;
             pt.z = target.z;
-            current_success_points->push_back(pt);
+            global_obstacles_->push_back(pt);
 
             plan_count++;
             relaxed_count++;
