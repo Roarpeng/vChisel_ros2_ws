@@ -508,25 +508,10 @@ private:
     }
 
     // 5. 检测空洞
-    pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr vision_holes(
-        new pcl::PointCloud<pcl::PointXYZRGBNormal>);
+    pcl::PointCloud<pcl::PointXYZ>::Ptr vision_holes(
+        new pcl::PointCloud<pcl::PointXYZ>);
     holeDetector(color_snap, depth_snap, info_snap, vision_holes);
     RCLCPP_INFO(this->get_logger(), "[DEBUG] Detected %zu holes (obstacles)", vision_holes->size());
-
-    // 清空障碍物列表，添加检测到的空洞和上一次成功的点位
-    global_obstacles_->clear();
-    for (const auto& pt : vision_holes->points) {
-      pcl::PointXYZRGBNormal hole_pt;
-      hole_pt.x = pt.x;
-      hole_pt.y = pt.y;
-      hole_pt.z = pt.z;
-      hole_pt.normal_x = 0.0f;
-      hole_pt.normal_y = 0.0f;
-      hole_pt.normal_z = -1.0f;
-      global_obstacles_->push_back(hole_pt);
-    }
-    *global_obstacles_ += *last_success_points_;  // 添加上一次成功的点位用于避让
-    RCLCPP_INFO(this->get_logger(), "[DEBUG] Added %zu previous success points as obstacles", last_success_points_->size());
 
     // 6. 预处理
     pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr processed_cloud(
@@ -549,6 +534,7 @@ private:
     pub_debug_cloud_->publish(debug_msg);
 
     // 7.5 将视觉孔洞添加到global_obstacles_，只添加深度差>2cm的孔洞
+    global_obstacles_->clear();
     for (const auto& hole : vision_holes->points) {
       // 计算孔洞周围点的平均深度
       float hole_z = hole.z;
@@ -580,11 +566,13 @@ private:
           new_obstacle.z = hole.z;
           new_obstacle.normal_x = 0.0f;
           new_obstacle.normal_y = 0.0f;
-          new_obstacle.normal_z = -1.0f;  // 向下法向量，表示孔洞深度方向
+          new_obstacle.normal_z = -1.0f;
           global_obstacles_->push_back(new_obstacle);
         }
       }
     }
+    *global_obstacles_ += *last_success_points_;  // 添加上一次成功的点位用于避让
+    RCLCPP_INFO(this->get_logger(), "[DEBUG] Added %zu previous success points as obstacles", last_success_points_->size());
 
     // 8. 网格决策
     int plan_count = 0;

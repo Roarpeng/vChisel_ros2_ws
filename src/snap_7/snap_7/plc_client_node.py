@@ -836,7 +836,7 @@ class PLCClientNode(Node):
                     # 添加位置和欧拉角数据（ABC，弧度）
                     vals = [
                         x, y, z,
-                        clamped_euler_rad[0], clamped_euler_rad[1], clamped_euler_rad[2]  # A(Z), B(Y), C(X) 角度（弧度）
+                        -1*clamped_euler_rad[0], -1*clamped_euler_rad[1], clamped_euler_rad[2]  # -A(Z), -B(Y), C(X) 角度（弧度）
                     ]
                     output_data.extend(vals)
                     valid_point_count += 1  # 【新增】增加有效点位计数
