@@ -57,8 +57,12 @@ typedef struct {
   float RANDOM_ANGLE_RANGE;   // 随机法向角度范围
 
   // [新增] 平面面积阈值（平方米）
-  float PLANE_AREA_HIGH;  // 3.5cm² - 平面模式阈值
-  float PLANE_AREA_LOW;   // 2.5cm² - 凹凸面模式阈值
+  float PLANE_AREA_HIGH;  // 15cm² - 平面模式阈值
+  float PLANE_AREA_LOW;   // 8cm² - 凹凸面模式阈值
+
+  // [新增] Z-range阈值（米）
+  float Z_RANGE_HYBRID_TH;      // 30mm - 超过此值使用混合模式（35°）
+  float Z_RANGE_PROTRUSION_TH;  // 50mm - 超过此值使用凸起模式（45°）
 
   // [新增] 混合模式参数
   float HYBRID_NORM_TH;   // 混合法向阈值
@@ -117,8 +121,8 @@ private:
   // [新增] 计算点云的凸包面积（平方米）
   float calculateConvexHullArea(pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud);
 
-  // [新增] 根据面积确定搜索模式
-  SearchMode determineSearchMode(float area);
+  // [新增] 根据面积和Z-range确定搜索模式
+  SearchMode determineSearchMode(float area, float z_range);
 
   // [新增] 随机模式搜索（基于上一次点位或网格中心）
   bool searchWithRandomMode(pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud,

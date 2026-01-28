@@ -1,0 +1,13 @@
+snap_7:
+  ros__parameters:
+    # ==================== PLC连接参数 ====================
+    plc_address: '192.168.1.36'
+    plc_rack: 0
+    plc_slot: 1
+    db_number: 2120
+    db_start: 64
+    poll_rate: 20.0
+    simulate_plc: false
+
+    # ==================== 欧拉角限制参数 ====================
+    max_euler_angle_degrees: 45.0  # 欧拉角限制（度），超过此值自动拉回到限制值

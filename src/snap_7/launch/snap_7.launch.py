@@ -6,10 +6,12 @@ from launch_ros.substitutions import FindPackageShare
 from launch.substitutions import PathJoinSubstitution
 
 # Launch norm_calc and plc_client_node
-# ros2 launch snap_7 snap_7.launch.py 
+# ros2 launch snap_7 snap_7.launch.py
 
 def generate_launch_description():
     pkg_share = FindPackageShare(package='norm_calc').find('norm_calc')
+    snap_7_pkg_share = FindPackageShare(package='snap_7').find('snap_7')
+
     # include existing norm_calc launch
     norm_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(PathJoinSubstitution([pkg_share, 'launch', 'norm_calc_launch.py']))
@@ -21,8 +23,7 @@ def generate_launch_description():
         output='screen',
         emulate_tty=True,
         parameters=[
-            {'db_number': 2120},  # Changed to 2120 to match the working test script
-            {'db_start': 64}
+            PathJoinSubstitution([snap_7_pkg_share, 'config', 'snap_7_params.yaml'])
         ]
     )
 

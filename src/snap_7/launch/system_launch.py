@@ -31,12 +31,7 @@ def generate_launch_description():
         output='screen',
         emulate_tty=True,
         parameters=[
-            {'db_number': 2120},  # 使用与测试脚本一致的DB号
-            {'db_start': 64},
-            {'plc_address': '192.168.1.36'},
-            {'plc_rack': 0},
-            {'plc_slot': 1},
-            {'poll_rate': 20.0}
+            PathJoinSubstitution([snap_7_pkg_share, 'config', 'snap_7_params.yaml'])
         ]
     )
 
