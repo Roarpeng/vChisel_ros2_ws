@@ -45,6 +45,13 @@ typedef struct {
   float TIP_CROP_RATIO;  // 切顶比例
   float BASE_CROP_RATIO; // 切底比例
 
+  // [新增] 避开上一次点位参数
+  float AVOID_LAST_POINT_DIST;    // 避开上一次点位的距离（1cm，默认1cm）
+
+  // [新增] 法向点间隔参数
+  float MIN_POINT_DISTANCE;       // 法向点之间的最小间隔（1cm，默认1cm）
+  bool CHECK_OPPOSITE_DIRECTION;  // 是否检查法向方向相反
+
   // [新增] 随机模式参数
   float RANDOM_OFFSET_RANGE;  // 随机位置偏移范围
   float RANDOM_ANGLE_RANGE;   // 随机法向角度范围
@@ -92,7 +99,7 @@ public:
 
   // 核心接口：在 ROI 点云中寻找最佳点
   bool findBestPoint(pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud_roi,
-                     pcl::PointCloud<pcl::PointXYZ>::Ptr obstacles,
+                     pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr obstacles,
                      pcl::PointXYZRGBNormal &out_point);
 
 private:
@@ -115,12 +122,12 @@ private:
 
   // [新增] 随机模式搜索（基于上一次点位或网格中心）
   bool searchWithRandomMode(pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud,
-                           pcl::PointCloud<pcl::PointXYZ>::Ptr obstacles,
+                           pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr obstacles,
                            pcl::PointXYZRGBNormal &result);
 
   // 内部通用搜索逻辑
   bool searchWithCriteria(pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud,
-                          pcl::PointCloud<pcl::PointXYZ>::Ptr obstacles,
+                          pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr obstacles,
                           float norm_th, float hole_dist_th, float curv_th,
                           pcl::PointXYZRGBNormal &result);
 };

@@ -15,7 +15,7 @@ void ChiselBox::markCompleted() { state_ = STATE_COMPLETED; }
 
 bool ChiselBox::findBestPoint(
     pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud_roi,
-    pcl::PointCloud<pcl::PointXYZ>::Ptr obstacles,
+    pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr obstacles,
     pcl::PointXYZRGBNormal &out_point) {
   // 如果已经是终态，直接返回
   if (state_ == STATE_COMPLETED || state_ == STATE_UNREACHABLE)
@@ -103,7 +103,7 @@ bool ChiselBox::findBestPoint(
 
 bool ChiselBox::searchWithCriteria(
     pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud,
-    pcl::PointCloud<pcl::PointXYZ>::Ptr obstacles, float norm_th,
+    pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr obstacles, float norm_th,
     float hole_dist_th, float curv_th, pcl::PointXYZRGBNormal &result) {
   if (cloud->empty())
     return false;
@@ -240,18 +240,63 @@ bool ChiselBox::searchWithCriteria(
     }
 
     // --- 2. 避障过滤 (Obstacle Filter) ---
-    bool clash = false;
+    // 检查与上一次法向点是否相同
+    bool is_same_as_last = false;
+    if (has_last_point_) {
+      float dx = pt.x - last_point_.x;
+      float dy = pt.y - last_point_.y;
+      float dz = pt.z - last_point_.z;
+      float dist = std::sqrt(dx*dx + dy*dy + dz*dz);
+      if (dist < param_.AVOID_LAST_POINT_DIST) {  // 距离<1cm认为是同一个点
+        is_same_as_last = true;
+      }
+    }
+    if (is_same_as_last) {
+      filtered_by_obstacle++;
+      continue;
+    }
+
+    // 检查与所有obstacles的距离和方向
+    bool too_close_or_same_direction = false;
     if (obstacles && !obstacles->empty()) {
       for (const auto &obs : obstacles->points) {
         float dx = pt.x - obs.x;
         float dy = pt.y - obs.y;
-        if (dx * dx + dy * dy < dist_sq_th) {
-          clash = true;
+        float dz = pt.z - obs.z;
+        float dist = std::sqrt(dx*dx + dy*dy + dz*dz);
+        
+        // 检查距离（使用调整后的避障距离：平面2cm，凸起2.5-3.5cm）
+        if (dist < adjusted_hole_dist) {
+          too_close_or_same_direction = true;
           break;
+        }
+        
+        // 检查方向是否相反
+        if (param_.CHECK_OPPOSITE_DIRECTION) {
+          // 计算障碍物法向量的模
+          float obs_norm = std::sqrt(obs.normal_x * obs.normal_x + 
+                                     obs.normal_y * obs.normal_y + 
+                                     obs.normal_z * obs.normal_z);
+          
+          // 跳过零向量（法向量未定义的点，如孔洞点）
+          if (obs_norm < 0.001f) {
+            continue;  // 跳过零向量，不进行方向检查
+          }
+          
+          // 计算归一化的点积
+          float dot_product = (pt.normal_x * obs.normal_x + 
+                              pt.normal_y * obs.normal_y + 
+                              pt.normal_z * obs.normal_z) / obs_norm;
+          
+          // 只有当点积 < 0（方向相反）时才需要避障
+          if (dot_product < 0.0f) {
+            too_close_or_same_direction = true;
+            break;
+          }
         }
       }
     }
-    if (clash) {
+    if (too_close_or_same_direction) {
       filtered_by_obstacle++;
       continue;
     }
@@ -343,7 +388,7 @@ bool ChiselBox::searchWithCriteria(
 
 // [新增] 随机模式搜索（基于上一次点位或网格中心）
 bool ChiselBox::searchWithRandomMode(pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud,
-                                     pcl::PointCloud<pcl::PointXYZ>::Ptr obstacles,
+                                     pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr obstacles,
                                      pcl::PointXYZRGBNormal &result) {
   if (cloud->empty()) return false;
 

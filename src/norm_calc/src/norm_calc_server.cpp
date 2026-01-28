@@ -108,8 +108,8 @@ private:
   int search_n_;
 
   std::vector<std::shared_ptr<chisel_box::ChiselBox>> grids_;
-  pcl::PointCloud<pcl::PointXYZ>::Ptr global_obstacles_{
-      new pcl::PointCloud<pcl::PointXYZ>};
+  pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr global_obstacles_{
+      new pcl::PointCloud<pcl::PointXYZRGBNormal>};
 
   std::mutex data_mutex_;
   cv::Mat img_color_, img_depth_;
@@ -168,6 +168,13 @@ private:
     param_.PROTRUSION_TH = this->declare_parameter("PROTRUSION_TH", 0.02);
     param_.TIP_CROP_RATIO = this->declare_parameter("TIP_CROP_RATIO", 0.25);
     param_.BASE_CROP_RATIO = this->declare_parameter("BASE_CROP_RATIO", 0.10);
+
+    // [新增] 读取避开上一次点位参数
+    param_.AVOID_LAST_POINT_DIST = this->declare_parameter("AVOID_LAST_POINT_DIST", 0.01f);
+
+    // [新增] 读取法向点间隔参数
+    param_.MIN_POINT_DISTANCE = this->declare_parameter("MIN_POINT_DISTANCE", 0.01f);
+    param_.CHECK_OPPOSITE_DIRECTION = this->declare_parameter("CHECK_OPPOSITE_DIRECTION", true);
 
     // [新增] 读取随机模式参数
     param_.RANDOM_OFFSET_RANGE = this->declare_parameter("RANDOM_OFFSET_RANGE", 0.02);
@@ -522,7 +529,6 @@ private:
         new pcl::PointCloud<pcl::PointXYZ>);
     holeDetector(color_snap, depth_snap, info_snap, vision_holes);
     RCLCPP_INFO(this->get_logger(), "[DEBUG] Detected %zu holes (obstacles)", vision_holes->size());
-    *global_obstacles_ += *vision_holes;
 
     // 6. 预处理
     pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr processed_cloud(
@@ -543,6 +549,44 @@ private:
     pcl::toROSMsg(*processed_cloud, debug_msg);
     debug_msg.header.frame_id = info_snap.header.frame_id;
     pub_debug_cloud_->publish(debug_msg);
+
+    // 7.5 将视觉孔洞添加到global_obstacles_，只添加深度差>2cm的孔洞
+    for (const auto& hole : vision_holes->points) {
+      // 计算孔洞周围点的平均深度
+      float hole_z = hole.z;
+      float avg_neighbor_z = 0.0f;
+      int neighbor_count = 0;
+      
+      for (const auto& pt : processed_cloud->points) {
+        float dx = pt.x - hole.x;
+        float dy = pt.y - hole.y;
+        float dist_xy = std::sqrt(dx*dx + dy*dy);
+        
+        // 检查2cm范围内的邻居
+        if (dist_xy < 0.02f) {
+          avg_neighbor_z += pt.z;
+          neighbor_count++;
+        }
+      }
+      
+      // 计算深度差
+      if (neighbor_count > 0) {
+        avg_neighbor_z /= neighbor_count;
+        float depth_diff = std::abs(hole_z - avg_neighbor_z);
+        
+        // 只有深度差>2cm的孔洞才添加到obstacles
+        if (depth_diff > 0.02f) {
+          pcl::PointXYZRGBNormal new_obstacle;
+          new_obstacle.x = hole.x;
+          new_obstacle.y = hole.y;
+          new_obstacle.z = hole.z;
+          new_obstacle.normal_x = 0.0f;
+          new_obstacle.normal_y = 0.0f;
+          new_obstacle.normal_z = -1.0f;  // 向下法向量，表示孔洞深度方向
+          global_obstacles_->push_back(new_obstacle);
+        }
+      }
+    }
 
     // 8. 网格决策
     int plan_count = 0;
@@ -576,10 +620,13 @@ private:
         cam_pose.orientation.w = 0; // 标记
         visual_poses.poses.push_back(cam_pose);
 
-        pcl::PointXYZ new_obstacle;
+        pcl::PointXYZRGBNormal new_obstacle;
         new_obstacle.x = target.x;
         new_obstacle.y = target.y;
         new_obstacle.z = target.z;
+        new_obstacle.normal_x = target.normal_x;
+        new_obstacle.normal_y = target.normal_y;
+        new_obstacle.normal_z = target.normal_z;
         global_obstacles_->push_back(new_obstacle);
 
         plan_count++;
@@ -644,10 +691,13 @@ private:
             cam_pose.orientation.w = 0;
             visual_poses.poses.push_back(cam_pose);
 
-            pcl::PointXYZ new_obstacle;
+            pcl::PointXYZRGBNormal new_obstacle;
             new_obstacle.x = target.x;
             new_obstacle.y = target.y;
             new_obstacle.z = target.z;
+            new_obstacle.normal_x = target.normal_x;
+            new_obstacle.normal_y = target.normal_y;
+            new_obstacle.normal_z = target.normal_z;
             global_obstacles_->push_back(new_obstacle);
 
             plan_count++;
