@@ -29,7 +29,7 @@ MAX_SIZE=10485760  # 10MB
 MAX_LOGS=5         # 保留最近5个日志文件
 LOCK_FILE="$WORKSPACE_DIR/.vchisel_system.lock"
 LAUNCH_PACKAGE="snap_7"
-LAUNCH_FILE="snap_7.launch.py"
+LAUNCH_FILE="snap_7.launch.py"  # 后台服务（不包含可视化窗口）
 
 # ============================================================
 # 辅助函数
@@ -258,11 +258,59 @@ create_log_dir
 # 启动前检查并滚动日志
 rotate_logs
 
+# 等待 GUI 完全就绪
+wait_for_gui() {
+    log_info "等待 GUI 完全就绪..."
+    
+    # 检查 GUI 检测脚本是否存在
+    if [ ! -f "$WORKSPACE_DIR/wait_for_gui.sh" ]; then
+        log_warn "未找到 GUI 检测脚本，跳过 GUI 就绪检测"
+        log_warn "建议检查: $WORKSPACE_DIR/wait_for_gui.sh"
+        return 0
+    fi
+    
+    # 执行 GUI 就绪检测（等待最多 60 秒）
+    if ! bash "$WORKSPACE_DIR/wait_for_gui.sh" 60 >> "$LOG_FILE" 2>&1; then
+        log_error "GUI 未在 60 秒内就绪"
+        log_error "可能的原因："
+        log_error "  1. 图形界面服务未启动"
+        log_error "  2. 用户未登录桌面环境"
+        log_error "  3. DISPLAY 或 Xauthority 配置错误"
+        log_error ""
+        log_error "建议检查："
+        log_error "  - 系统日志: journalctl -xe"
+        log_error "  - 显示管理器: systemctl status gdm3"
+        log_error "  - X 日志: /var/log/Xorg.0.log"
+        
+        # 询问是否继续
+        if [ -t 0 ]; then
+            echo ""
+            read -p "GUI 未就绪，是否仍要启动系统？(y/n): " -n 1 -r
+            echo ""
+            
+            if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+                log_info "用户取消启动"
+                exit 1
+            fi
+            
+            log_warn "用户强制启动系统（GUI 未就绪）"
+        else
+            # 非交互模式，直接退出
+            exit 1
+        fi
+    fi
+    
+    log_info "GUI 已就绪，可以启动可视化服务"
+}
+
 # 检查 ROS2 环境
 check_ros2_environment
 
 # 加载 ROS2 环境
 load_ros2_environment
+
+# 等待 GUI 完全就绪
+wait_for_gui
 
 # 清理旧的相机进程
 cleanup_camera_processes
