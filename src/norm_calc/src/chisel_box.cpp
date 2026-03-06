@@ -6,7 +6,7 @@
 namespace chisel_box {
 
 ChiselBox::ChiselBox(int row, int col, ChiselParam param)
-    : row_(row), col_(col), param_(param), state_(STATE_PENDING), has_last_point_(false) {}
+    : row_(row), col_(col), param_(param), state_(STATE_PENDING), has_last_point_(false), last_success_mode_(MODE_PROTRUSION) {}
 
 ChiselBox::~ChiselBox() {}
 
@@ -40,7 +40,12 @@ bool ChiselBox::findBestPoint(
 
     // 计算凸包面积
     float area = calculateConvexHullArea(cloud_roi);
-    SearchMode mode = determineSearchMode(area, z_range);
+    
+    // 计算平坦率
+    float flat_ratio = calculateFlatRatio(cloud_roi);
+    
+    // 根据面积、Z-range和平坦率确定搜索模式
+    SearchMode mode = determineSearchMode(area, z_range, flat_ratio);
 
     // 根据模式选择参数
     float norm_th, hole_dist_th, curv_th;
@@ -73,6 +78,7 @@ bool ChiselBox::findBestPoint(
       state_ = STATE_COMPLETED;
       last_point_ = out_point;
       has_last_point_ = true;
+      last_success_mode_ = mode;  // [新增] 记录成功时使用的模式
       std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] " << mode_name << " succeeded" << std::endl;
       return true;
     } else {
@@ -95,6 +101,7 @@ bool ChiselBox::findBestPoint(
       state_ = STATE_COMPLETED;
       last_point_ = out_point;
       has_last_point_ = true;
+      last_success_mode_ = MODE_PROTRUSION;  // [新增] RELAXED模式对应PROTRUSION
       std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] RELAXED mode succeeded" << std::endl;
       return true;
     } else {
@@ -111,6 +118,7 @@ bool ChiselBox::findBestPoint(
       state_ = STATE_COMPLETED;
       last_point_ = out_point;
       has_last_point_ = true;
+      last_success_mode_ = MODE_PROTRUSION;  // [新增] RANDOM模式也对应PROTRUSION
       std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] RANDOM mode succeeded" << std::endl;
       return true;
     } else {
@@ -125,6 +133,7 @@ bool ChiselBox::findBestPoint(
         state_ = STATE_COMPLETED;
         last_point_ = out_point;
         has_last_point_ = true;
+        last_success_mode_ = MODE_PROTRUSION;  // [新增] 备用方案也对应PROTRUSION
         std::cout << "[DEBUG] Grid[" << row_ << "," << col_ << "] Fallback succeeded" << std::endl;
         return true;
       }
@@ -554,22 +563,45 @@ float ChiselBox::calculateConvexHullArea(pcl::PointCloud<pcl::PointXYZRGBNormal>
   return area;
 }
 
-// [新增] 根据面积和Z-range确定搜索模式
-ChiselBox::SearchMode ChiselBox::determineSearchMode(float area, float z_range) {
-  // 优先判断Z-range：如果表面起伏太大，即使面积大也使用更大的角度
+// [新增] 计算点云的平坦率（曲率 < PROTRUSION_CURV_TH 的点数比例）
+float ChiselBox::calculateFlatRatio(pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud) {
+  if (cloud->empty()) return 0.0f;
+  
+  int flat_point_count = 0;
+  for (const auto &pt : cloud->points) {
+    if (pt.curvature < param_.PROTRUSION_CURV_TH) {
+      flat_point_count++;
+    }
+  }
+  return (float)flat_point_count / cloud->size();
+}
+
+// [新增] 根据面积、Z-range和平坦率确定搜索模式
+ChiselBox::SearchMode ChiselBox::determineSearchMode(float area, float z_range, float flat_ratio) {
+  // 优先判断面积和平坦率：如果面积大且平坦，即使Z-range稍大也使用PLANE模式
+  if (area >= param_.PLANE_AREA_HIGH && flat_ratio > param_.PLANE_FLAT_RATIO_HIGH) {
+    // 面积大且平坦，优先使用PLANE模式（除非Z-range过大）
+    if (z_range < param_.Z_RANGE_PROTRUSION_TH) {  // 50mm
+      return MODE_PLANE;  // 25.8°
+    } else {
+      return MODE_HYBRID;  // 35° (Z-range太大，降级)
+    }
+  }
+  
+  // 其次判断Z-range：如果Z-range超过阈值，使用更大的角度
   if (z_range > param_.Z_RANGE_PROTRUSION_TH) {
     return MODE_PROTRUSION;  // 45°
   } else if (z_range > param_.Z_RANGE_HYBRID_TH) {
     return MODE_HYBRID;  // 35°
   }
-
-  // 如果Z-range在合理范围内，按面积判断
+  
+  // 按面积判断
   if (area >= param_.PLANE_AREA_HIGH) {
-    return MODE_PLANE;  // 25.8°
+    return MODE_PLANE;
   } else if (area >= param_.PLANE_AREA_LOW) {
-    return MODE_HYBRID;  // 35°
+    return MODE_HYBRID;
   } else {
-    return MODE_PROTRUSION;  // 45°
+    return MODE_PROTRUSION;
   }
 }
 

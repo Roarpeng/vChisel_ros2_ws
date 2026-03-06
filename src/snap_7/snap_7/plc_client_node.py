@@ -44,7 +44,7 @@ class PLCClientNode(Node):
         self.declare_parameter('db_start', 0)  # byte offset
         self.declare_parameter('poll_rate', 20.0)  # Hz
         self.declare_parameter('simulate_plc', False)  # Add simulate mode parameter
-        self.declare_parameter('max_euler_angle_degrees', 30.0)  # 最大欧拉角限制（度），默认30度
+        self.declare_parameter('max_euler_angle_degrees', 45.0)  # 最大欧拉角限制（度），默认45度（与配置文件保持一致）
 
         self.plc_address = self.get_parameter('plc_address').get_parameter_value().string_value
         self.plc_rack = self.get_parameter('plc_rack').get_parameter_value().integer_value

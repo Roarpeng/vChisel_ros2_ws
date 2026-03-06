@@ -122,6 +122,15 @@ private:
   int pcd_save_count_ = 0;
   bool enable_pcd_save_ = true;  // 是否启用点云保存功能
 
+  // [新增] 欧拉角限制参数
+  double max_euler_angle_degrees_;  // 欧拉角最大角度（度）
+  double max_euler_angle_rad_;      // 欧拉角最大角度（弧度）
+
+  // [新增] 平面AB角度随机功能参数
+  bool enable_plane_random_ab_angle_;    // 是否启用平面AB角度随机功能
+  double plane_random_ab_angle_range_;   // AB角度随机范围（度）
+  double plane_random_ab_angle_rad_;     // AB角度随机范围（弧度）
+
   // 发布者句柄
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_debug_cloud_;
   rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr pub_captured_image_;
@@ -241,6 +250,20 @@ private:
     RCLCPP_INFO(this->get_logger(), "[%.6f, %.6f, %.6f, %.6f]",
       T_cam_tool_(3,0), T_cam_tool_(3,1), T_cam_tool_(3,2), T_cam_tool_(3,3));
     RCLCPP_INFO(this->get_logger(), "===========================");
+
+    // [新增] 读取欧拉角限制参数
+    max_euler_angle_degrees_ = this->declare_parameter("max_euler_angle_degrees", 45.0);
+    max_euler_angle_rad_ = max_euler_angle_degrees_ * M_PI / 180.0;
+    RCLCPP_INFO(this->get_logger(), "Max Euler angle: %.1f degrees (%.4f radians)",
+                max_euler_angle_degrees_, max_euler_angle_rad_);
+
+    // [新增] 读取平面AB角度随机功能参数
+    enable_plane_random_ab_angle_ = this->declare_parameter("enable_plane_random_ab_angle", true);
+    plane_random_ab_angle_range_ = this->declare_parameter("plane_random_ab_angle_range", 10.0);
+    plane_random_ab_angle_rad_ = plane_random_ab_angle_range_ * M_PI / 180.0;
+    RCLCPP_INFO(this->get_logger(), "Plane random AB angle: %s, range: %.1f degrees (%.4f radians)",
+                enable_plane_random_ab_angle_ ? "enabled" : "disabled",
+                plane_random_ab_angle_range_, plane_random_ab_angle_rad_);
   }
 
   void initGrids() {
@@ -379,20 +402,21 @@ private:
     return q;
   }
 
-  // 限制角度在±30度范围内
+  // 限制角度在配置的范围内
   Eigen::Vector3d clampEulerAngles(const Eigen::Vector3d &euler_rad) {
-    const double max_angle = M_PI / 6.0; // 30度 = π/6 弧度
+    const double max_angle = max_euler_angle_rad_;  // 使用配置的角度限制
 
     Eigen::Vector3d clamped;
-    clamped(0) = std::max(-max_angle, std::min(max_angle, euler_rad(0))); // Z轴旋转
-    clamped(1) = std::max(-max_angle, std::min(max_angle, euler_rad(1))); // Y轴旋转
-    clamped(2) = std::max(-max_angle, std::min(max_angle, euler_rad(2))); // X轴旋转
+    clamped(0) = std::max(-max_angle, std::min(max_angle, euler_rad(0))); // Z轴旋转 (A角)
+    clamped(1) = std::max(-max_angle, std::min(max_angle, euler_rad(1))); // Y轴旋转 (B角)
+    clamped(2) = std::max(-max_angle, std::min(max_angle, euler_rad(2))); // X轴旋转 (C角)
 
     return clamped;
   }
 
   void transformPose(const pcl::PointXYZRGBNormal &target,
-                     geometry_msgs::msg::Pose &pose) {
+                     geometry_msgs::msg::Pose &pose,
+                     bool is_plane_mode = false) {
     // 使用配置文件中的手眼标定矩阵
     Eigen::Matrix4d T_cam_tool = T_cam_tool_;
 
@@ -415,8 +439,22 @@ private:
     // 将四元数转换为欧拉角（ZYX顺序）
     Eigen::Vector3d euler = quaternionToEulerZYX(q);
 
-    // 限制欧拉角在±30度范围内
+    // 限制欧拉角在配置的范围内
     Eigen::Vector3d clamped_euler = clampEulerAngles(euler);
+
+    // [新增] 如果是PLANE模式且启用了随机功能，在A角和B角上添加随机偏移
+    if (is_plane_mode && enable_plane_random_ab_angle_) {
+      // 生成[-range, +range]范围内的随机数
+      double random_a = (2.0 * rand() / RAND_MAX - 1.0) * plane_random_ab_angle_rad_;
+      double random_b = (2.0 * rand() / RAND_MAX - 1.0) * plane_random_ab_angle_rad_;
+
+      // 添加到A角和B角
+      clamped_euler(0) += random_a;  // A角（Z轴旋转）
+      clamped_euler(1) += random_b;  // B角（Y轴旋转）
+
+      // 再次限制范围，确保不超出最大角度限制
+      clamped_euler = clampEulerAngles(clamped_euler);
+    }
 
     // 将限制后的欧拉角转换回四元数
     Eigen::Quaterniond clamped_q = eulerZYXToQuaternion(clamped_euler(0), clamped_euler(1), clamped_euler(2));
@@ -590,7 +628,8 @@ private:
 
         // 1. 存入结果 (Tool Frame)
         geometry_msgs::msg::Pose tool_pose;
-        transformPose(target, tool_pose);
+        bool is_plane_mode = (grid->getLastSuccessMode() == chisel_box::ChiselBox::MODE_PLANE);
+        transformPose(target, tool_pose, is_plane_mode);
         tool_pose.orientation.w = target.curvature;
         res->pose_list.poses.push_back(tool_pose);
 
@@ -672,7 +711,8 @@ private:
           if (grid->findBestPoint(roi_cloud, global_obstacles_, target)) {
             // 1. 存入结果 (Tool Frame)
             geometry_msgs::msg::Pose tool_pose;
-            transformPose(target, tool_pose);
+            bool is_plane_mode = (grid->getLastSuccessMode() == chisel_box::ChiselBox::MODE_PLANE);
+            transformPose(target, tool_pose, is_plane_mode);
             tool_pose.orientation.w = target.curvature;
             res->pose_list.poses.push_back(tool_pose);
 

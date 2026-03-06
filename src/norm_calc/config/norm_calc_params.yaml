@@ -78,7 +78,7 @@ norm_calc:
     PLANE_HOLE_DIST: 0.025        # 平面区域避障距离（从0.02增加到0.025，即2.5cm，过滤更多边缘点）
     PLANE_ANGLE_WEIGHT_MULT: 3.0  # 平面策略法向权重倍数（极度强调垂直度）
     PLANE_CURV_WEIGHT_MULT: 5.0   # 平面策略曲率权重倍数（优先平整）
-    PLANE_CENTER_WEIGHT_MULT: 1.0 # 平面策略中心权重倍数（从0.2增加到1.0，提高5倍，优先选择中心）
+    PLANE_CENTER_WEIGHT_MULT: 1.5 # 平面策略中心权重倍数（从0.2增加到1.0，提高5倍，优先选择中心）
     PLANE_AVOID_CONCAVE_DIST: 0.025  # 平面区域避开凹面边缘的距离（从0.02增加到0.025，即2.5cm，扩大惩罚范围）
 
     # ==================== 凸起策略参数优化 ====================
@@ -107,3 +107,10 @@ norm_calc:
       marker_id: 123
       marker_size: 0.10  # 米
       data_count: 15  # 采集的数据组数
+
+    # ==================== 欧拉角限制参数 ====================
+    max_euler_angle_degrees: 45.0  # 欧拉角限制（度），A、B、C角的最大绝对值
+
+    # ==================== 平面AB角度随机功能 ====================
+    enable_plane_random_ab_angle: true  # 是否启用平面AB角度随机功能
+    plane_random_ab_angle_range: 10.0  # AB角度随机范围（度），在[-range, +range]范围内随机

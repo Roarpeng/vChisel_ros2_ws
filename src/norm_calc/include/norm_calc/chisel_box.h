@@ -87,6 +87,9 @@ typedef struct {
 
 class ChiselBox {
 public:
+  // [新增] 搜索模式枚举
+  enum SearchMode { MODE_PLANE, MODE_HYBRID, MODE_PROTRUSION };
+
   ChiselBox(int row, int col, ChiselParam param);
   ~ChiselBox();
 
@@ -101,6 +104,9 @@ public:
   int getRow() const { return row_; }
   int getCol() const { return col_; }
 
+  // [新增] 获取成功时使用的搜索模式
+  SearchMode getLastSuccessMode() const { return last_success_mode_; }
+
   // 核心接口：在 ROI 点云中寻找最佳点
   bool findBestPoint(pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud_roi,
                      pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr obstacles,
@@ -111,18 +117,21 @@ private:
   ChiselParam param_;
   BoxState state_;
 
-  // [新增] 搜索模式枚举
-  enum SearchMode { MODE_PLANE, MODE_HYBRID, MODE_PROTRUSION };
-
   // [新增] 上一次点位存储
   pcl::PointXYZRGBNormal last_point_;
   bool has_last_point_;
 
+  // [新增] 记录成功时使用的搜索模式
+  SearchMode last_success_mode_;
+
   // [新增] 计算点云的凸包面积（平方米）
   float calculateConvexHullArea(pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud);
 
-  // [新增] 根据面积和Z-range确定搜索模式
-  SearchMode determineSearchMode(float area, float z_range);
+  // [新增] 计算点云的平坦率（曲率 < PROTRUSION_CURV_TH 的点数比例）
+  float calculateFlatRatio(pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud);
+
+  // [新增] 根据面积、Z-range和平坦率确定搜索模式
+  SearchMode determineSearchMode(float area, float z_range, float flat_ratio);
 
   // [新增] 随机模式搜索（基于上一次点位或网格中心）
   bool searchWithRandomMode(pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud,
