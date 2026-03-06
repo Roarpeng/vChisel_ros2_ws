@@ -5,6 +5,18 @@
 # 功能：启动视觉处理系统，包含日志管理、进程清理、错误处理
 # ============================================================
 
+# 检查是否使用 sudo
+if [ "$EUID" -eq 0 ]; then
+    echo "错误：请不要使用 sudo 运行此脚本！"
+    echo "ROS2 节点应该以普通用户运行，使用 sudo 会导致："
+    echo "  - 环境变量问题"
+    echo "  - 权限问题"
+    echo "  - Python 包找不到"
+    echo ""
+    echo "正确用法：./start_system.sh"
+    exit 1
+fi
+
 set -e  # 遇到错误立即退出
 
 # ============================================================
@@ -15,7 +27,7 @@ LOG_DIR="/home/bosch/logs"
 LOG_FILE="$LOG_DIR/visual.log"
 MAX_SIZE=10485760  # 10MB
 MAX_LOGS=5         # 保留最近5个日志文件
-LOCK_FILE="/tmp/vchisel_system.lock"
+LOCK_FILE="$WORKSPACE_DIR/.vchisel_system.lock"
 LAUNCH_PACKAGE="snap_7"
 LAUNCH_FILE="snap_7.launch.py"
 
@@ -102,8 +114,11 @@ cleanup() {
     
     # 清理锁文件
     if [ -f "$LOCK_FILE" ]; then
-        rm -f "$LOCK_FILE"
-        log_info "已清理锁文件"
+        if rm -f "$LOCK_FILE" 2>/dev/null; then
+            log_info "已清理锁文件"
+        else
+            log_warn "无法删除锁文件: $LOCK_FILE (可能已被其他进程删除)"
+        fi
     fi
     
     log_info "系统退出，退出码: $exit_code"
@@ -142,6 +157,7 @@ cleanup_camera_processes() {
 
 # 检查是否已有实例在运行
 check_duplicate_instance() {
+    # 检查锁文件是否存在
     if [ -f "$LOCK_FILE" ]; then
         local lock_pid=$(cat "$LOCK_FILE" 2>/dev/null || echo "")
         
@@ -152,12 +168,25 @@ check_duplicate_instance() {
             exit 1
         else
             log_warn "发现过期的锁文件，正在清理..."
-            rm -f "$LOCK_FILE"
+            
+            # 尝试删除过期的锁文件
+            if ! rm -f "$LOCK_FILE" 2>/dev/null; then
+                log_error "无法删除锁文件: $LOCK_FILE"
+                log_error "请手动删除: rm -f $LOCK_FILE"
+                exit 1
+            fi
+            
+            log_info "过期锁文件已清理"
         fi
     fi
     
     # 创建锁文件
-    echo $$ > "$LOCK_FILE"
+    if ! echo $$ > "$LOCK_FILE" 2>/dev/null; then
+        log_error "无法创建锁文件: $LOCK_FILE"
+        log_error "请检查目录权限"
+        exit 1
+    fi
+    
     log_info "已创建锁文件 (PID: $$)"
 }
 

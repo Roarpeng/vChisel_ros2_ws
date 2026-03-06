@@ -1,4 +1,6 @@
 from setuptools import setup
+import os
+from glob import glob
 
 package_name = 'snap_7'
 
@@ -11,6 +13,7 @@ setup(
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
         ('share/' + package_name + '/launch', ['launch/snap_7.launch.py', 'launch/system_launch.py']),
+        ('share/' + package_name + '/config', ['config/snap_7_params.yaml']),
     ],
     install_requires=['setuptools'],
     zip_safe=True,

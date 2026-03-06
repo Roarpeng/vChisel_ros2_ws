@@ -1172,3 +1172,325 @@ RANDOM_ANGLE_RANGE: 0.35   # 随机法向角度范围（弧度，默认20°）
    - 测试断点续传功能（重启后从最后一个编号继续）
    - 验证文件命名正确性
    - 验证文件内容完整性
+
+---
+
+## 项目更新日志
+
+### 2026-03-06 - visual_base分支：系统启动优化和自动化功能增强
+
+#### 核心改进
+- ✅ 全面完善系统启动脚本
+- ✅ 新增闲时自动重启PC功能
+- ✅ 新增开机自启动功能（两种方式）
+- ✅ 修复snap_7包配置问题
+
+#### 1. 系统启动脚本完善 (start_system.sh)
+
+**修复问题**：
+- ✅ 修复日志滚动逻辑bug（原来会导致文件编号跳跃）
+- ✅ 修复锁文件权限问题（从/tmp改到项目目录）
+
+**新增功能**：
+- ✅ 添加sudo检查（避免误用root权限启动）
+- ✅ 添加相机进程自动清理（启动前清理残留进程）
+- ✅ 添加ROS2环境检查（验证环境是否正确）
+- ✅ 添加工作空间检查（验证是否已构建）
+- ✅ 添加进程互斥锁（防止重复启动）
+- ✅ 添加信号处理（优雅退出，自动清理）
+- ✅ 增强日志记录（分级日志、详细参数记录）
+
+**技术实现**：
+```bash
+# 锁文件位置
+LOCK_FILE="$WORKSPACE_DIR/.vchisel_system.lock"
+
+# sudo检查
+if [ "$EUID" -eq 0 ]; then
+    echo "错误：请不要使用 sudo 运行此脚本！"
+    exit 1
+fi
+
+# 相机进程清理
+if [ -f "$WORKSPACE_DIR/clean_camera_processes.py" ]; then
+    python3 "$WORKSPACE_DIR/clean_camera_processes.py"
+fi
+
+# 环境检查
+check_ros2_environment() {
+    # 检查 ROS2 是否安装
+    # 检查工作空间是否存在
+    # 检查工作空间是否已构建
+}
+```
+
+#### 2. snap_7 包配置修复
+
+**问题描述**：
+- 参数文件 `snap_7_params.yaml` 未被安装到 install 目录
+- 导致启动时找不到参数文件
+
+**解决方案**：
+- 修改 `src/snap_7/setup.py`
+- 添加 config 目录到 data_files
+
+**代码修改**：
+```python
+data_files=[
+    # ... 其他文件 ...
+    ('share/' + package_name + '/config', ['config/snap_7_params.yaml']),
+],
+```
+
+#### 3. 闲时自动重启PC功能
+
+**功能定义**：
+- 在每天凌晨3点检查系统是否处于闲时
+- 如果是闲时状态，则自动重启PC
+- 闲时定义：相机关闭超过5分钟，且没有新的相机启动命令
+
+**执行条件**：
+- ✅ 时间为凌晨3点
+- ✅ 系统正在运行
+- ✅ 相机已关闭
+- ✅ 关闭时间超过5分钟
+
+**工作流程**：
+```
+凌晨3点触发
+    ↓
+检查系统运行状态 → 未运行退出
+    ↓
+检查相机状态 → 相机开启退出
+    ↓
+检查关闭时间 → 不足5分钟退出
+    ↓
+停止项目进程
+    ↓
+清理临时文件
+    ↓
+重启PC系统
+```
+
+**技术实现**：
+
+**新增文件**：
+- `idle_restart.sh` - 主重启脚本
+- `install_idle_restart_cron.sh` - Cron任务安装脚本
+- `uninstall_idle_restart_cron.sh` - Cron任务卸载脚本
+- `test_idle_restart.sh` - 测试脚本
+- `IDLE_RESTART_README.md` - 详细说明文档
+
+**相机状态记录**（修改 `plc_client_node.py`）：
+```python
+# 相机启动时
+with open('/tmp/vchisel_camera_status.txt', 'w') as f:
+    f.write('on')
+
+# 相机关闭时
+with open('/tmp/vchisel_camera_status.txt', 'w') as f:
+    f.write('off')
+with open('/tmp/vchisel_camera_off_time.txt', 'w') as f:
+    f.write(str(int(time.time())))
+```
+
+**安全机制**：
+1. **时间限制**：只能在凌晨3点执行
+2. **条件检查**：必须满足所有闲时条件
+3. **交互保护**：手动运行时需要设置 `FORCE_REBOOT=true`
+4. **权限控制**：需要root权限（通过root crontab）
+5. **日志记录**：所有操作都有详细日志
+
+**使用方法**：
+```bash
+# 安装闲时重启任务
+./install_idle_restart_cron.sh
+
+# 查看已安装的任务
+sudo crontab -l
+
+# 查看日志
+tail -f /home/bosch/logs/visual.log | grep idle_restart
+
+# 测试逻辑（不会真正重启）
+./test_idle_restart.sh
+
+# 卸载任务
+./uninstall_idle_restart_cron.sh
+```
+
+#### 4. 开机自启动功能
+
+提供两种开机自启动方式：
+
+**方法1：systemd 服务（推荐）**
+
+**优点**：
+- 系统级服务，不依赖用户登录
+- 自动重启（失败后延迟10秒）
+- 专业可靠，适合生产环境
+- 支持无头模式（服务器环境）
+
+**使用方法**：
+```bash
+# 安装自启动服务
+./install_autostart.sh
+
+# 查看服务状态
+sudo systemctl status vchisel-system.service
+
+# 管理命令
+sudo systemctl start vchisel-system.service     # 启动
+sudo systemctl stop vchisel-system.service      # 停止
+sudo systemctl restart vchisel-system.service   # 重启
+sudo journalctl -u vchisel-system.service -f   # 查看日志
+
+# 卸载
+./uninstall_autostart.sh
+```
+
+**服务配置**（`/etc/systemd/system/vchisel-system.service`）：
+```ini
+[Unit]
+Description=vChisel ROS2 System
+After=network.target
+After=graphical.target
+Wants=graphical.target
+
+[Service]
+Type=simple
+User=bosch
+Group=bosch
+Environment="ROS_DOMAIN_ID=0"
+Environment="DISPLAY=:0"
+WorkingDirectory=/home/bosch/vChisel_ros2_ws
+ExecStart=/home/bosch/vChisel_ros2_ws/start_system.sh
+ExecStop=/bin/kill -INT ${MAINPID}
+Restart=on-failure
+RestartSec=10
+StandardOutput=append:/home/bosch/logs/visual.log
+StandardError=append:/home/bosch/logs/visual.log
+
+[Install]
+WantedBy=multi-user.target
+```
+
+**方法2：桌面自启动**
+
+**优点**：
+- 配置简单，不需要root权限
+- 可视化窗口，方便调试
+- 适合桌面环境开发测试
+
+**缺点**：
+- 需要用户登录桌面
+- 不自动重启（失败后）
+
+**使用方法**：
+```bash
+# 安装桌面自启动
+./install_autostart_desktop.sh
+
+# 注销并重新登录后生效
+
+# 卸载
+./uninstall_autostart_desktop.sh
+```
+
+#### 文件修改清单
+
+**修改的文件**：
+- `.gitignore` - 添加锁文件 `.vchisel_system.lock`
+- `src/snap_7/setup.py` - 添加 config 文件安装
+- `src/snap_7/snap_7/plc_client_node.py` - 添加相机状态记录
+- `start_system.sh` - 全面完善启动逻辑
+
+**新增的文件**：
+
+**闲时重启功能**：
+- `idle_restart.sh` - 主重启脚本
+- `install_idle_restart_cron.sh` - Cron安装脚本
+- `uninstall_idle_restart_cron.sh` - Cron卸载脚本
+- `test_idle_restart.sh` - 测试脚本
+- `IDLE_RESTART_README.md` - 详细说明文档
+
+**开机自启动功能**：
+- `install_autostart.sh` - systemd服务安装脚本
+- `uninstall_autostart.sh` - systemd服务卸载脚本
+- `install_autostart_desktop.sh` - 桌面自启动安装脚本
+- `uninstall_autostart_desktop.sh` - 桌面自启动卸载脚本
+
+#### 完整安装流程（推荐）
+
+```bash
+# 1. 构建项目
+cd /home/bosch/vChisel_ros2_ws
+source /opt/ros/humble/setup.bash
+colcon build
+
+# 2. 安装开机自启动（方法1推荐）
+./install_autostart.sh
+
+# 3. 安装闲时重启任务
+./install_idle_restart_cron.sh
+
+# 4. 验证安装
+sudo systemctl status vchisel-system.service
+sudo crontab -l | grep idle_restart
+```
+
+#### 系统配置总结
+
+**开机自启动**：
+- 服务名称：vchisel-system.service
+- 服务类型：systemd 服务
+- 自动重启：失败后延迟10秒重启
+- 日志位置：`/home/bosch/logs/visual.log`
+
+**闲时重启**：
+- 执行时间：每天凌晨 3:00
+- 执行条件：相机关闭超过 5 分钟
+- 重启类型：PC 系统重启
+- 任务位置：root crontab
+
+**临时文件**：
+- `/tmp/vchisel_camera_status.txt` - 相机状态（on/off）
+- `/tmp/vchisel_camera_off_time.txt` - 相机关闭时间戳
+- `/home/bosch/vChisel_ros2_ws/.vchisel_system.lock` - 进程锁文件
+
+#### 构建状态
+- ✅ 构建成功，无编译错误
+- ✅ 所有脚本已添加执行权限
+- ✅ 配置文件正确安装
+
+#### 测试建议
+
+1. **启动脚本测试**
+   - 测试不使用 sudo 启动
+   - 测试重复启动防护
+   - 测试相机进程清理
+   - 测试日志滚动功能
+
+2. **闲时重启测试**
+   - 运行 `./test_idle_restart.sh` 测试逻辑
+   - 查看日志验证条件判断
+   - 不要轻易测试真实重启（危险操作）
+
+3. **开机自启动测试**
+   - 重启系统验证服务启动
+   - 查看服务状态和日志
+   - 测试服务管理命令
+
+4. **系统集成测试**
+   - 完整流程：开机自启 → 运行 → 闲时重启
+   - 验证日志记录完整性
+   - 验证进程管理正确性
+
+#### 注意事项
+- ⚠️ 不要使用 sudo 运行 start_system.sh
+- ⚠️ 闲时重启任务需要 root 权限（已添加到 root crontab）
+- ⚠️ 重启操作不可逆，请谨慎测试
+- ⚠️ systemd 服务会在网络和图形界面启动后自动运行
+- ⚠️ 详细说明请参考 `IDLE_RESTART_README.md`
+
+---

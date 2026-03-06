@@ -3,3 +3,4 @@
 /install
 /log
 /pcd_data
+/.vchisel_system.lock

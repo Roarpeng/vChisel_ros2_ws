@@ -448,6 +448,14 @@ class PLCClientNode(Node):
                 self.get_logger().info('Camera already launched')
                 return
 
+            # 记录相机开启状态到临时文件（用于闲时重启脚本）
+            try:
+                with open('/tmp/vchisel_camera_status.txt', 'w') as f:
+                    f.write('on')
+                self.get_logger().debug('Camera status file updated: on')
+            except Exception as e:
+                self.get_logger().debug(f'Failed to update camera status file: {e}')
+
             try:
                 # 【增强版】在启动新相机之前，使用多种方法彻底清理所有旧相机进程
                 self.get_logger().info('Forcefully cleaning up all old camera processes...')
@@ -630,6 +638,18 @@ class PLCClientNode(Node):
         self.mark_1 = 0
         self.mark_2 = 0
         self.pakg_new = 0
+        
+        # 记录相机关闭状态和时间到临时文件（用于闲时重启脚本）
+        try:
+            with open('/tmp/vchisel_camera_status.txt', 'w') as f:
+                f.write('off')
+            import time
+            with open('/tmp/vchisel_camera_off_time.txt', 'w') as f:
+                f.write(str(int(time.time())))
+            self.get_logger().debug('Camera status files updated: off')
+        except Exception as e:
+            self.get_logger().debug(f'Failed to update camera status files: {e}')
+        
         self.get_logger().info('Camera shutdown complete')
 
     def _monitor_camera_status(self):
